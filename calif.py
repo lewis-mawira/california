@@ -17,7 +17,13 @@ def init_db():
     # product_type: 'Mzinga', 'Quarter', or 'Standard'
     c.execute('''CREATE TABLE IF NOT EXISTS products 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, category TEXT, 
-                  product_type TEXT, buying_price REAL, selling_price REAL, stock REAL)''')
+                  product_type TEXT, buying_price REAL, selling_price REAL, stock REAL,
+                  shots_per_bottle REAL DEFAULT 0)''')
+    # Add shots_per_bottle column if upgrading existing DB
+    try:
+        c.execute("ALTER TABLE products ADD COLUMN shots_per_bottle REAL DEFAULT 0")
+    except Exception:
+        pass
     # Added 'unit_sold' to track if it was a Full, Half, or Cup
     c.execute('''CREATE TABLE IF NOT EXISTS sales 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, product_name TEXT, category TEXT, quantity REAL, 
@@ -532,8 +538,8 @@ if page == "🛒 POS TERMINAL":
         st.error("INVENTORY IS EMPTY. GO TO ADMIN VAULT TO ADD STOCK.")
     else:
         # Distinct icons per category tab
-        cats  = ["KEG",   "Beers", "Spirits", "Wines", "Sodas", "Energy Drinks", "Condoms"]
-        icons = ["🍺",    "🍾",   "🥃",     "🍷",   "🥤",   "⚡",            "🛡️"]
+        cats  = ["KEG",   "Beers", "Spirits", "Wines", "Sodas", "Energy Drinks", "Condoms", "Shots"]
+        icons = ["🍺",    "🍾",   "🥃",     "🍷",   "🥤",   "⚡",            "🛡️",     "🥂"]
         tabs = st.tabs([f"{icons[i]} {cats[i]}" for i in range(len(cats))])
 
         for i, tab in enumerate(tabs):
@@ -554,11 +560,12 @@ if page == "🛒 POS TERMINAL":
                             s_cols = st.columns(2)
                             for s_i, s_row in s_items.reset_index(drop=True).iterrows():
                                 with s_cols[s_i % 2]:
+                                    stk_color = "red" if s_row['stock'] <= 1 else "black"
                                     st.markdown(f"""
                                         <div class="neo-card">
                                             <h2 style="margin:0; font-size:clamp(0.9rem,3vw,1.3rem);">{s_row['name']}</h2>
                                             <small style="color:grey;">TYPE: {s_row['product_type']}</small><br>
-                                            <h4 style="background:black; color:white; display:inline-block; padding:2px 8px; margin-top:5px; font-size:0.8rem;">
+                                            <h4 style="background:{stk_color}; color:white; display:inline-block; padding:2px 8px; margin-top:5px; font-size:0.8rem;">
                                                 STK: {s_row['stock']:.2f}
                                             </h4>
                                             <h3 style="color:#FF007A; margin:4px 0;">KES {s_row['selling_price']:,.0f}</h3>
@@ -566,11 +573,17 @@ if page == "🛒 POS TERMINAL":
                                     """, unsafe_allow_html=True)
                                     with st.popover(f"💵 SELL {s_row['name']}", use_container_width=True):
                                         s_method = st.radio("PAYMENT", ["CASH", "M-PESA"], key=f"pay_{s_row['id']}")
-                                        b1, b2 = st.columns(2)
-                                        if b1.button(f"FULL {s_type.upper()}", key=f"f_{s_row['id']}"):
-                                            record_sale(s_row['id'], s_row['name'], category, 1, s_row['selling_price'], s_row['buying_price'], s_method, f"Full {s_type}")
-                                        if b2.button(f"HALF {s_type.upper()}", key=f"h_{s_row['id']}"):
-                                            record_sale(s_row['id'], s_row['name'], category, 0.5, s_row['selling_price']*0.5, s_row['buying_price']*0.5, s_method, f"Half {s_type}")
+                                        if s_type in ["Mzinga", "Nusu"]:
+                                            # Only full bottle allowed for Mzinga and Nusu
+                                            if st.button(f"FULL {s_type.upper()}", key=f"f_{s_row['id']}"):
+                                                record_sale(s_row['id'], s_row['name'], category, 1, s_row['selling_price'], s_row['buying_price'], s_method, f"Full {s_type}")
+                                        else:
+                                            # Quarter: full and half allowed
+                                            b1, b2 = st.columns(2)
+                                            if b1.button(f"FULL {s_type.upper()}", key=f"f_{s_row['id']}"):
+                                                record_sale(s_row['id'], s_row['name'], category, 1, s_row['selling_price'], s_row['buying_price'], s_method, f"Full {s_type}")
+                                            if b2.button(f"HALF {s_type.upper()}", key=f"h_{s_row['id']}"):
+                                                record_sale(s_row['id'], s_row['name'], category, 0.5, s_row['selling_price']*0.5, s_row['buying_price']*0.5, s_method, f"Half {s_type}")
                     continue
 
                 if items.empty:
@@ -580,14 +593,21 @@ if page == "🛒 POS TERMINAL":
                 cols = st.columns(2)
                 for idx, row in items.reset_index(drop=True).iterrows():
                     with cols[idx % 2]:
+                        stk_color = "red" if row['stock'] <= 1 else "black"
+                        if category == "Shots":
+                            stk_label = f"SHOTS LEFT: {row['stock']:.0f}"
+                            price_label = f"KES {row['selling_price']:,.0f} / Shot"
+                        else:
+                            stk_label = f"STK: {row['stock']:.2f}"
+                            price_label = f"KES {row['selling_price']:,.0f}"
                         st.markdown(f"""
                             <div class="neo-card">
                                 <h2 style="margin:0; font-size:clamp(0.9rem,3vw,1.3rem);">{row['name']}</h2>
                                 <small style="color:grey;">TYPE: {row['product_type']}</small><br>
-                                <h4 style="background:black; color:white; display:inline-block; padding:2px 8px; margin-top:5px; font-size:0.8rem;">
-                                    STK: {row['stock']:.2f}
+                                <h4 style="background:{stk_color}; color:white; display:inline-block; padding:2px 8px; margin-top:5px; font-size:0.8rem;">
+                                    {stk_label}
                                 </h4>
-                                <h3 style="color:#FF007A; margin:4px 0;">KES {row['selling_price']:,.0f}</h3>
+                                <h3 style="color:#FF007A; margin:4px 0;">{price_label}</h3>
                             </div>
                         """, unsafe_allow_html=True)
 
@@ -596,28 +616,25 @@ if page == "🛒 POS TERMINAL":
 
                             if category == "KEG":
                                 cost_l = 156.0
-                                if st.button("JUG (1200ML @ 240/-)", key=f"jug_{row['id']}"):
-                                    if row['stock'] < 1.2:
+                                if st.button("JUG (1500ML @ 240/-)", key=f"jug_{row['id']}"):
+                                    if row['stock'] < 1.5:
                                         st.error("⛔ OUT OF STOCK")
                                     else:
-                                        record_sale(row['id'], row['name'], "KEG", 1.2, 240, (1.2*cost_l), method, "1200ML Jug")
-                                if st.button("CUP KUBWA (400ML @ 80/-)", key=f"kb_{row['id']}"):
-                                    if row['stock'] < 0.4:
+                                        record_sale(row['id'], row['name'], "KEG", 1.5, 240, (1.5*cost_l), method, "1500ML Jug")
+                                if st.button("CUP KUBWA (500ML @ 80/-)", key=f"kb_{row['id']}"):
+                                    if row['stock'] < 0.5:
                                         st.error("⛔ OUT OF STOCK")
                                     else:
-                                        record_sale(row['id'], row['name'], "KEG", 0.4, 80, (0.4*cost_l), method, "400ML Cup")
-                                if st.button("CUP NDOGO (200ML @ 50/-)", key=f"nd_{row['id']}"):
-                                    if row['stock'] < 0.2:
+                                        record_sale(row['id'], row['name'], "KEG", 0.5, 80, (0.5*cost_l), method, "500ML Cup")
+                                if st.button("CUP NDOGO (250ML @ 60/-)", key=f"nd_{row['id']}"):
+                                    if row['stock'] < 0.25:
                                         st.error("⛔ OUT OF STOCK")
                                     else:
-                                        record_sale(row['id'], row['name'], "KEG", 0.2, 50, (0.2*cost_l), method, "200ML Cup")
+                                        record_sale(row['id'], row['name'], "KEG", 0.25, 60, (0.25*cost_l), method, "250ML Cup")
 
                             elif category == "Spirits" and row['product_type'] == "Nusu":
-                                s1, s2 = st.columns(2)
-                                if s1.button("FULL NUSU", key=f"fn_{row['id']}"):
+                                if st.button("FULL NUSU", key=f"fn_{row['id']}"):
                                     record_sale(row['id'], row['name'], category, 1, row['selling_price'], row['buying_price'], method, "Full Nusu")
-                                if s2.button("HALF NUSU", key=f"hn_{row['id']}"):
-                                    record_sale(row['id'], row['name'], category, 0.5, row['selling_price']*0.5, row['buying_price']*0.5, method, "Half Nusu")
 
                             elif category == "Spirits" and row['product_type'] == "Quarter":
                                 s1, s2 = st.columns(2)
@@ -627,9 +644,14 @@ if page == "🛒 POS TERMINAL":
                                     record_sale(row['id'], row['name'], category, 0.5, row['selling_price']*0.5, row['buying_price']*0.5, method, "Half Quarter")
 
                             else:
-                                unit_label = "Full Bottle" if category in ["Beers", "Wines", "Spirits"] else "Unit"
-                                if st.button(f"CONFIRM {unit_label}", key=f"std_{row['id']}"):
-                                    record_sale(row['id'], row['name'], category, 1, row['selling_price'], row['buying_price'], method, unit_label)
+                                unit_label = "Full Bottle" if category in ["Beers", "Wines", "Spirits"] else ("Shot" if category == "Shots" else "Unit")
+                                if category == "Shots":
+                                    if st.button(f"SELL 1 SHOT — KES {row['selling_price']:,.0f}", key=f"std_{row['id']}"):
+                                        cost_per_shot = row['buying_price'] / row['shots_per_bottle'] if row['shots_per_bottle'] > 0 else 0
+                                        record_sale(row['id'], row['name'], category, 1, row['selling_price'], cost_per_shot, method, "Shot")
+                                else:
+                                    if st.button(f"CONFIRM {unit_label}", key=f"std_{row['id']}"):
+                                        record_sale(row['id'], row['name'], category, 1, row['selling_price'], row['buying_price'], method, unit_label)
 
 # ============================================================
 # --- 📈 2. ANALYTICS & PROFIT ---
@@ -787,7 +809,7 @@ elif page == "🔐 ADMIN VAULT":
         # ---- TAB 1: STOCK ENTRY ----
         with t1:
             st.markdown("### ADD NEW STOCK")
-            cat_n = st.selectbox("CHOOSE CATEGORY", ["KEG", "Beers", "Spirits", "Wines", "Sodas", "Energy Drinks", "Condoms"])
+            cat_n = st.selectbox("CHOOSE CATEGORY", ["KEG", "Beers", "Spirits", "Wines", "Sodas", "Energy Drinks", "Condoms", "Shots"])
 
             with st.form("new_product_form"):
                 if cat_n == "KEG":
@@ -800,6 +822,13 @@ elif page == "🔐 ADMIN VAULT":
                     p_buy  = st.number_input("Buying Price (Full Bottle)")
                     p_sell = st.number_input("Selling Price (Full Bottle)")
                     qty_n  = st.number_input("Quantity of Bottles", min_value=1.0)
+                elif cat_n == "Shots":
+                    p_name = st.text_input("Product Name (e.g. Whiskey Shots)")
+                    p_type = "Shots"
+                    p_buy  = st.number_input("Buying Price per Bottle")
+                    shots_per_bottle = st.number_input("Shots per Bottle", min_value=1.0, step=1.0, value=20.0)
+                    p_sell = st.number_input("Selling Price per Shot (KES)")
+                    qty_n  = st.number_input("Number of Bottles", min_value=1.0, step=1.0)
                 else:
                     p_name = st.text_input("Product Name")
                     p_type = "Standard"
@@ -808,11 +837,19 @@ elif page == "🔐 ADMIN VAULT":
                     qty_n  = st.number_input("Quantity", min_value=1.0)
 
                 if st.form_submit_button("COMMIT TO INVENTORY"):
-                    final_q = (qty_n * 50) if cat_n == "KEG" else qty_n
+                    if cat_n == "KEG":
+                        final_q = qty_n * 50
+                        spb = 0
+                    elif cat_n == "Shots":
+                        final_q = qty_n * shots_per_bottle
+                        spb = shots_per_bottle
+                    else:
+                        final_q = qty_n
+                        spb = 0
                     conn = get_connection(); c = conn.cursor()
                     try:
-                        c.execute("INSERT INTO products (name, category, product_type, buying_price, selling_price, stock) VALUES (?,?,?,?,?,?)",
-                                  (p_name, cat_n, p_type, p_buy, p_sell, final_q))
+                        c.execute("INSERT INTO products (name, category, product_type, buying_price, selling_price, stock, shots_per_bottle) VALUES (?,?,?,?,?,?,?)",
+                                  (p_name, cat_n, p_type, p_buy, p_sell, final_q, spb))
                     except Exception:
                         c.execute("UPDATE products SET stock = stock + ? WHERE name = ?", (final_q, p_name))
                     conn.commit(); conn.close()
@@ -831,10 +868,38 @@ elif page == "🔐 ADMIN VAULT":
                     c_a, c_b = st.columns(2)
                     new_s = c_a.number_input("Update Stock Count",    value=float(row['stock']),         key=f"s_{row['id']}")
                     new_p = c_b.number_input("Update Selling Price",  value=float(row['selling_price']), key=f"p_{row['id']}")
+                    if row['category'] == 'Shots':
+                        spb_val = float(row['shots_per_bottle']) if row['shots_per_bottle'] else 0.0
+                        new_spb = st.number_input("Shots per Bottle", value=spb_val, min_value=0.0, key=f"spb_{row['id']}")
                     if st.button("SAVE UPDATES", key=f"btn_{row['id']}"):
-                        execute_db("UPDATE products SET stock=?, selling_price=? WHERE id=?",
-                                   (new_s, new_p, row['id']))
+                        if row['category'] == 'Shots':
+                            execute_db("UPDATE products SET stock=?, selling_price=?, shots_per_bottle=? WHERE id=?",
+                                       (new_s, new_p, new_spb, row['id']))
+                        else:
+                            execute_db("UPDATE products SET stock=?, selling_price=? WHERE id=?",
+                                       (new_s, new_p, row['id']))
                         st.rerun()
+                    st.markdown("---")
+                    st.markdown("<span style='color:red; font-size:0.8rem;'>⚠️ DANGER: DELETE THIS PRODUCT</span>", unsafe_allow_html=True)
+                    del_key = f"del_confirm_{row['id']}"
+                    if del_key not in st.session_state:
+                        st.session_state[del_key] = False
+                    if st.button("🗑️ DELETE PRODUCT", key=f"delbtn_{row['id']}"):
+                        st.session_state[del_key] = True
+                    if st.session_state.get(del_key):
+                        del_pin = st.text_input("Enter password to confirm deletion:", type="password", key=f"delpin_{row['id']}")
+                        d1, d2 = st.columns(2)
+                        if d1.button("✅ CONFIRM DELETE", key=f"delconf_{row['id']}"):
+                            if del_pin == "nesh001":
+                                execute_db("DELETE FROM products WHERE id=?", (row['id'],))
+                                st.session_state[del_key] = False
+                                st.success(f"✅ {row['name']} DELETED")
+                                st.rerun()
+                            else:
+                                st.error("❌ WRONG PASSWORD")
+                        if d2.button("❌ CANCEL", key=f"delcancel_{row['id']}"):
+                            st.session_state[del_key] = False
+                            st.rerun()
 
         # ---- TAB 3: END OF DAY (DETAILED) ----
         with t3:
