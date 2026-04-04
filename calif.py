@@ -318,12 +318,84 @@ st.markdown(f"""
 # We use a hidden st.button as the actual Streamlit trigger, and the 
 # component clicks it via postMessage → no iframe escaping needed.
 
+# --- OUT OF STOCK POPUP ---
 if st.session_state.out_of_stock:
     st.session_state.out_of_stock = False
-    st.error("⛔ OUT OF STOCK — Cannot complete this sale. Please restock first.")
+    # Show full-screen out of stock overlay
+    st.markdown('<div id="close-oos-wrapper" style="position:fixed;top:-999px;left:-999px;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none;">', unsafe_allow_html=True)
+    oos_clicked = st.button("__CLOSE_OOS_INTERNAL__", key="close_oos_hidden")
+    st.markdown('</div>', unsafe_allow_html=True)
+    if oos_clicked:
+        st.rerun()
+    components.html("""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Archivo+Black&display=swap');
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body {
+            background: #FF007A;
+            font-family: 'Archivo Black', sans-serif;
+            display: flex; flex-direction: column;
+            justify-content: center; align-items: center;
+            width: 100vw; height: 100vh;
+            border: 20px solid black;
+            text-align: center; padding: 20px;
+            overflow: hidden;
+        }
+        .x-btn {
+            position: fixed; top: 20px; right: 20px;
+            width: 64px; height: 64px;
+            background: #000; color: #FF007A;
+            border: 5px solid #000;
+            font-size: 2rem; font-family: 'Archivo Black', sans-serif;
+            font-weight: 900; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .oos-txt { font-size: clamp(3rem, 15vw, 9rem); color: black; line-height: 0.9; }
+        .oos-sub { font-size: clamp(1rem, 4vw, 2rem); color: white; background: black; padding: 12px 24px; margin-top: 24px; }
+        .close-btn {
+            margin-top: 40px; background: #000; color: #fff;
+            border: 6px solid #000;
+            font-size: clamp(1rem, 4vw, 1.6rem);
+            font-family: 'Archivo Black', sans-serif;
+            font-weight: 900; text-transform: uppercase;
+            padding: 20px 36px; cursor: pointer;
+            box-shadow: 8px 8px 0px white;
+        }
+    </style>
+    </head>
+    <body>
+        <button class="x-btn" onclick="doClose()">✕</button>
+        <div class="oos-txt">OUT OF<br>STOCK!</div>
+        <div class="oos-sub">⛔ PLEASE RESTOCK BEFORE SELLING</div>
+        <button class="close-btn" onclick="doClose()">✖ CLOSE &amp; GO BACK ➔</button>
+        <script>
+        function doClose() {
+            var btns = window.parent.document.querySelectorAll('button');
+            for (var i = 0; i < btns.length; i++) {
+                if (btns[i].innerText === '__CLOSE_OOS_INTERNAL__') { btns[i].click(); return; }
+            }
+            window.parent.location.reload();
+        }
+        </script>
+    </body>
+    </html>
+    """, height=700, scrolling=False)
     st.stop()
 
+# --- FULL SCREEN SALE POPUP ---
+# st.components.v1.html() renders inside its own iframe which IS allowed to
+# navigate window.parent. We render the entire SOLD overlay as a component
+# that covers 100vw/100vh of the PARENT window. The close buttons call
+# window.parent.location.reload() which triggers a full Streamlit rerun,
+# and since sale_complete is stored in session_state (server-side),
+# it stays False after the record_sale sets it and rerun clears it.
+# We use a hidden st.button as the actual Streamlit trigger, and the
+# component clicks it via postMessage → no iframe escaping needed.
 
+if st.session_state.sale_complete:
     # Render hidden trigger button - invisible via CSS on its wrapper
     st.markdown('<div id="close-sale-wrapper" style="position:fixed;top:-999px;left:-999px;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none;">', unsafe_allow_html=True)
     clicked = st.button("__CLOSE_SALE_INTERNAL__", key="close_sale_hidden")
@@ -432,17 +504,21 @@ with st.sidebar:
         if st.button("🗑️ CLEAR ALL DATA"):
             st.session_state['confirm_clear'] = True
         if st.session_state.get('confirm_clear'):
-            st.warning("THIS WILL DELETE ALL SALES, EXPENSES & PRODUCTS. Are you sure?")
+            st.warning("THIS WILL DELETE ALL DATA. Enter password to confirm:")
+            clear_pin = st.text_input("PASSWORD", type="password", key="clear_db_pin")
             c1, c2 = st.columns(2)
-            if c1.button("✅ YES, CLEAR"):
-                conn = get_connection(); c = conn.cursor()
-                c.execute("DELETE FROM sales")
-                c.execute("DELETE FROM expenses")
-                c.execute("DELETE FROM products")
-                conn.commit(); conn.close()
-                st.session_state['confirm_clear'] = False
-                st.success("Database cleared!")
-                st.rerun()
+            if c1.button("✅ CONFIRM DELETE"):
+                if clear_pin == "nesh001":
+                    conn = get_connection(); c = conn.cursor()
+                    c.execute("DELETE FROM sales")
+                    c.execute("DELETE FROM expenses")
+                    c.execute("DELETE FROM products")
+                    conn.commit(); conn.close()
+                    st.session_state['confirm_clear'] = False
+                    st.success("Database cleared!")
+                    st.rerun()
+                else:
+                    st.error("❌ WRONG PASSWORD")
             if c2.button("❌ CANCEL"):
                 st.session_state['confirm_clear'] = False
                 st.rerun()
