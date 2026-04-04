@@ -8,3 +8,4 @@ numpy
 streamlit
 pandas
 plotly
+pytz
