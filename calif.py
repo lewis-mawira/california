@@ -4,7 +4,8 @@ import pandas as pd
 import sqlite3
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+import pytz
 
 # --- DATABASE LAYER ---
 def get_connection():
@@ -236,6 +237,7 @@ st.markdown("""
 if 'sale_complete' not in st.session_state: st.session_state.sale_complete = False
 if 'sale_msg' not in st.session_state: st.session_state.sale_msg = ""
 if 'vault_unlocked' not in st.session_state: st.session_state.vault_unlocked = False
+if 'out_of_stock' not in st.session_state: st.session_state.out_of_stock = False
 
 # --- UTILITY FUNCTIONS ---
 def run_query(q):
@@ -251,19 +253,33 @@ def execute_db(q, params=()):
     conn.commit()
     conn.close()
 
+EAT = pytz.timezone('Africa/Nairobi')
+
+def now_eat():
+    return datetime.now(EAT).replace(tzinfo=None)
+
 def record_sale(p_id, p_name, cat, qty, s_price, b_price, method, unit):
+    # Check stock before selling
+    conn = get_connection(); c = conn.cursor()
+    c.execute("SELECT stock FROM products WHERE id = ?", (p_id,))
+    row = c.fetchone()
+    conn.close()
+    if row is None or row[0] < qty:
+        st.session_state.sale_msg = f"OUT OF STOCK"
+        st.session_state.out_of_stock = True
+        return
     profit = s_price - b_price
     conn = get_connection(); c = conn.cursor()
     c.execute("""INSERT INTO sales (product_name, category, quantity, unit_sold, sell_price, buying_price, profit, payment_method, timestamp) 
                  VALUES (?,?,?,?,?,?,?,?,?)""",
-              (p_name, cat, qty, unit, s_price, b_price, profit, method, datetime.now()))
+              (p_name, cat, qty, unit, s_price, b_price, profit, method, now_eat()))
     c.execute("UPDATE products SET stock = stock - ? WHERE id = ?", (qty, p_id))
     conn.commit(); conn.close()
     st.session_state.sale_msg = f"{p_name} ({unit}) SOLD FOR KES {s_price:,.0f}/-"
     st.session_state.sale_complete = True
 
 # --- FIXED RESPONSIVE HEADER ---
-now = datetime.now()
+now = now_eat()
 st.markdown(f"""
     <div class="header-container">
         <div class="header-text">CLUB CALIFORNIA</div>
@@ -302,7 +318,12 @@ st.markdown(f"""
 # We use a hidden st.button as the actual Streamlit trigger, and the 
 # component clicks it via postMessage → no iframe escaping needed.
 
-if st.session_state.sale_complete:
+if st.session_state.out_of_stock:
+    st.session_state.out_of_stock = False
+    st.error("⛔ OUT OF STOCK — Cannot complete this sale. Please restock first.")
+    st.stop()
+
+
     # Render hidden trigger button - invisible via CSS on its wrapper
     st.markdown('<div id="close-sale-wrapper" style="position:fixed;top:-999px;left:-999px;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none;">', unsafe_allow_html=True)
     clicked = st.button("__CLOSE_SALE_INTERNAL__", key="close_sale_hidden")
@@ -405,6 +426,26 @@ with st.sidebar:
                     label_visibility="collapsed")
     st.markdown("---")
     if st.button("🔄 REFRESH APP"): st.rerun()
+    st.markdown("---")
+    if st.session_state.vault_unlocked:
+        st.markdown("<p style='color:red; font-size:0.75rem;'>⚠️ DANGER ZONE</p>", unsafe_allow_html=True)
+        if st.button("🗑️ CLEAR ALL DATA"):
+            st.session_state['confirm_clear'] = True
+        if st.session_state.get('confirm_clear'):
+            st.warning("THIS WILL DELETE ALL SALES, EXPENSES & PRODUCTS. Are you sure?")
+            c1, c2 = st.columns(2)
+            if c1.button("✅ YES, CLEAR"):
+                conn = get_connection(); c = conn.cursor()
+                c.execute("DELETE FROM sales")
+                c.execute("DELETE FROM expenses")
+                c.execute("DELETE FROM products")
+                conn.commit(); conn.close()
+                st.session_state['confirm_clear'] = False
+                st.success("Database cleared!")
+                st.rerun()
+            if c2.button("❌ CANCEL"):
+                st.session_state['confirm_clear'] = False
+                st.rerun()
 
 # ============================================================
 # --- 🛒 1. POS TERMINAL ---
@@ -423,6 +464,38 @@ if page == "🛒 POS TERMINAL":
             with tab:
                 category = cats[i]
                 items = df_p[df_p['category'] == category]
+
+                if category == "Spirits":
+                    spirit_types = ["Mzinga", "Quarter", "Nusu"]
+                    s_tabs = st.tabs(["🥃 MZINGA", "🥃 QUARTER", "🥃 NUSU"])
+                    for st_idx, s_tab in enumerate(s_tabs):
+                        with s_tab:
+                            s_type = spirit_types[st_idx]
+                            s_items = items[items['product_type'] == s_type]
+                            if s_items.empty:
+                                st.info(f"No {s_type} spirits yet.")
+                                continue
+                            s_cols = st.columns(2)
+                            for s_i, s_row in s_items.reset_index(drop=True).iterrows():
+                                with s_cols[s_i % 2]:
+                                    st.markdown(f"""
+                                        <div class="neo-card">
+                                            <h2 style="margin:0; font-size:clamp(0.9rem,3vw,1.3rem);">{s_row['name']}</h2>
+                                            <small style="color:grey;">TYPE: {s_row['product_type']}</small><br>
+                                            <h4 style="background:black; color:white; display:inline-block; padding:2px 8px; margin-top:5px; font-size:0.8rem;">
+                                                STK: {s_row['stock']:.2f}
+                                            </h4>
+                                            <h3 style="color:#FF007A; margin:4px 0;">KES {s_row['selling_price']:,.0f}</h3>
+                                        </div>
+                                    """, unsafe_allow_html=True)
+                                    with st.popover(f"💵 SELL {s_row['name']}", use_container_width=True):
+                                        s_method = st.radio("PAYMENT", ["CASH", "M-PESA"], key=f"pay_{s_row['id']}")
+                                        b1, b2 = st.columns(2)
+                                        if b1.button(f"FULL {s_type.upper()}", key=f"f_{s_row['id']}"):
+                                            record_sale(s_row['id'], s_row['name'], category, 1, s_row['selling_price'], s_row['buying_price'], s_method, f"Full {s_type}")
+                                        if b2.button(f"HALF {s_type.upper()}", key=f"h_{s_row['id']}"):
+                                            record_sale(s_row['id'], s_row['name'], category, 0.5, s_row['selling_price']*0.5, s_row['buying_price']*0.5, s_method, f"Half {s_type}")
+                    continue
 
                 if items.empty:
                     st.info(f"Nothing in {category} yet.")
@@ -447,10 +520,28 @@ if page == "🛒 POS TERMINAL":
 
                             if category == "KEG":
                                 cost_l = 156.0
+                                if st.button("JUG (1200ML @ 240/-)", key=f"jug_{row['id']}"):
+                                    if row['stock'] < 1.2:
+                                        st.error("⛔ OUT OF STOCK")
+                                    else:
+                                        record_sale(row['id'], row['name'], "KEG", 1.2, 240, (1.2*cost_l), method, "1200ML Jug")
                                 if st.button("CUP KUBWA (400ML @ 80/-)", key=f"kb_{row['id']}"):
-                                    record_sale(row['id'], row['name'], "KEG", 0.4, 80, (0.4*cost_l), method, "400ML Cup")
+                                    if row['stock'] < 0.4:
+                                        st.error("⛔ OUT OF STOCK")
+                                    else:
+                                        record_sale(row['id'], row['name'], "KEG", 0.4, 80, (0.4*cost_l), method, "400ML Cup")
                                 if st.button("CUP NDOGO (200ML @ 50/-)", key=f"nd_{row['id']}"):
-                                    record_sale(row['id'], row['name'], "KEG", 0.2, 50, (0.2*cost_l), method, "200ML Cup")
+                                    if row['stock'] < 0.2:
+                                        st.error("⛔ OUT OF STOCK")
+                                    else:
+                                        record_sale(row['id'], row['name'], "KEG", 0.2, 50, (0.2*cost_l), method, "200ML Cup")
+
+                            elif category == "Spirits" and row['product_type'] == "Nusu":
+                                s1, s2 = st.columns(2)
+                                if s1.button("FULL NUSU", key=f"fn_{row['id']}"):
+                                    record_sale(row['id'], row['name'], category, 1, row['selling_price'], row['buying_price'], method, "Full Nusu")
+                                if s2.button("HALF NUSU", key=f"hn_{row['id']}"):
+                                    record_sale(row['id'], row['name'], category, 0.5, row['selling_price']*0.5, row['buying_price']*0.5, method, "Half Nusu")
 
                             elif category == "Spirits" and row['product_type'] == "Quarter":
                                 s1, s2 = st.columns(2)
@@ -509,6 +600,17 @@ elif page == "📈 ANALYTICS & PROFIT":
                                      title="Top 5 Brands", color_discrete_sequence=['#CCFF00'])
                     st.plotly_chart(fig_top, use_container_width=True, key=f"top_chart_{label}")
 
+                # Daily transaction log
+                if label == "Daily":
+                    st.markdown("### 📋 TODAY'S TRANSACTION LOG")
+                    if v_s.empty:
+                        st.info("No transactions today yet.")
+                    else:
+                        st.dataframe(
+                            v_s[['timestamp', 'product_name', 'category', 'unit_sold', 'quantity', 'sell_price', 'buying_price', 'profit', 'payment_method']].sort_values('timestamp', ascending=False),
+                            use_container_width=True
+                        )
+
         st.markdown("### 🍺 KEG LIVE LEVEL")
         keg_stk = run_query("SELECT stock FROM products WHERE category = 'KEG' LIMIT 1")
         if not keg_stk.empty:
@@ -534,7 +636,7 @@ elif page == "💸 OVERHEADS":
             note = st.text_input("REMARK")
             if st.form_submit_button("LOCK EXPENSE"):
                 execute_db("INSERT INTO expenses (category, amount, description, timestamp) VALUES (?,?,?,?)",
-                           (cat, amt, note, datetime.now()))
+                           (cat, amt, note, now_eat()))
                 st.success("✅ EXPENSE SAVED")
                 st.rerun()
 
@@ -617,7 +719,7 @@ elif page == "🔐 ADMIN VAULT":
                     p_name, p_type, p_buy, p_sell = "KEG MTUNGI", "Standard", 7800.0, 0.0
                 elif cat_n == "Spirits":
                     brand = st.text_input("Product Brand Name (e.g. Chrome, KC)")
-                    p_type = st.radio("Size Type", ["Mzinga", "Quarter"])
+                    p_type = st.radio("Size Type", ["Mzinga", "Quarter", "Nusu"])
                     p_name = f"{brand} {p_type}"
                     p_buy  = st.number_input("Buying Price (Full Bottle)")
                     p_sell = st.number_input("Selling Price (Full Bottle)")
@@ -661,7 +763,7 @@ elif page == "🔐 ADMIN VAULT":
         # ---- TAB 3: END OF DAY (DETAILED) ----
         with t3:
             st.markdown("### 🌃 END OF DAY RECONCILIATION")
-            date_check = st.date_input("Select Date", datetime.now().date())
+            date_check = st.date_input("Select Date", now_eat().date())
             df_day = run_query(f"SELECT * FROM sales WHERE date(timestamp) = '{date_check}'")
 
             if df_day.empty:
