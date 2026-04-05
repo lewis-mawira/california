@@ -787,37 +787,47 @@ elif page == "📈 ANALYTICS & PROFIT":
                             v_s[['timestamp', 'product_name', 'category', 'unit_sold', 'quantity', 'sell_price', 'buying_price', 'profit', 'payment_method']].sort_values('timestamp', ascending=False),
                             use_container_width=True
                         )
-                        st.markdown("#### ✏️ MODIFY RECENT TRANSACTION")
-                        st.caption("Transactions can be modified within 3 minutes of being made. Password required.")
+                        st.markdown("#### ↩️ REVERSE RECENT TRANSACTION")
+                        st.caption("Transactions can be reversed within 3 minutes of being made. Stock will be restored. Password required.")
                         now_ts = now_eat()
                         editable = v_s[pd.to_datetime(v_s['timestamp']) >= pd.Timestamp(now_ts - timedelta(minutes=3))]
                         if editable.empty:
-                            st.info("No transactions within the last 3 minutes to edit.")
+                            st.info("No transactions within the last 3 minutes to reverse.")
                         else:
                             edit_options = {f"#{r['id']} — {r['product_name']} ({r['unit_sold']}) KES {r['sell_price']:,.0f} @ {pd.to_datetime(r['timestamp']).strftime('%H:%M:%S')}": r['id']
                                            for _, r in editable.iterrows()}
-                            chosen_label = st.selectbox("Select transaction to edit", list(edit_options.keys()), key="edit_tx_select")
+                            chosen_label = st.selectbox("Select transaction to reverse", list(edit_options.keys()), key="edit_tx_select")
                             chosen_id = edit_options[chosen_label]
                             chosen_row = v_s[v_s['id'] == chosen_id].iloc[0]
-                            with st.expander("✏️ EDIT FIELDS", expanded=True):
-                                e1, e2 = st.columns(2)
-                                new_tx_sell  = e1.number_input("Sell Price", value=float(chosen_row['sell_price']), key="edit_sell")
-                                new_tx_pay   = e2.selectbox("Payment Method", ["CASH", "M-PESA"],
-                                                            index=0 if chosen_row['payment_method'] == 'CASH' else 1, key="edit_pay")
-                                new_tx_qty   = e1.number_input("Quantity", value=float(chosen_row['quantity']), min_value=0.01, key="edit_qty")
-                                new_tx_buy   = e2.number_input("Buying Price", value=float(chosen_row['buying_price']), key="edit_buy")
-                                edit_pin = st.text_input("Password to confirm edit", type="password", key="edit_tx_pin")
-                                if st.button("✅ SAVE EDIT", key="save_edit_tx"):
-                                    if edit_pin == "nesh001":
-                                        new_profit = new_tx_sell - new_tx_buy
-                                        execute_db("""UPDATE sales SET sell_price=%s, buying_price=%s, quantity=%s, 
-                                                      profit=%s, payment_method=%s WHERE id=%s""",
-                                                   (new_tx_sell, new_tx_buy, new_tx_qty, new_profit, new_tx_pay, chosen_id))
-                                        log_activity("SALE MODIFIED", f"Sale #{chosen_id} | {chosen_row['product_name']} | Sell: {chosen_row['sell_price']}→{new_tx_sell} | Pay: {chosen_row['payment_method']}→{new_tx_pay} | Qty: {chosen_row['quantity']}→{new_tx_qty}")
-                                        st.success("✅ TRANSACTION UPDATED")
-                                        st.rerun()
-                                    else:
-                                        st.error("❌ WRONG PASSWORD")
+                            st.markdown(f"""
+                            <div style="background:#FF007A; border:3px solid black; padding:10px 14px; margin:8px 0; box-shadow:4px 4px 0px black;">
+                                <span style="color:white; font-size:0.75rem; letter-spacing:2px; text-transform:uppercase;">⚠️ THIS WILL BE REVERSED</span><br>
+                                <span style="color:white; font-size:0.9rem;"><b>{chosen_row['product_name']}</b> ({chosen_row['unit_sold']}) — KES {chosen_row['sell_price']:,.0f} via {chosen_row['payment_method']}</span><br>
+                                <span style="color:black; font-size:0.75rem;">Stock of <b>{chosen_row['quantity']}</b> unit(s) will be returned to inventory.</span>
+                            </div>
+                            """, unsafe_allow_html=True)
+                            rev_pin = st.text_input("Password to confirm reversal", type="password", key="reverse_tx_pin")
+                            if st.button("↩️ CONFIRM REVERSAL", key="confirm_reverse_tx"):
+                                if rev_pin == "nesh001":
+                                    conn = get_connection()
+                                    try:
+                                        c = conn.cursor()
+                                        # Restore stock to the product
+                                        c.execute("UPDATE products SET stock = stock + %s WHERE name = %s",
+                                                  (chosen_row['quantity'], chosen_row['product_name']))
+                                        # Delete the sale record
+                                        c.execute("DELETE FROM sales WHERE id = %s", (chosen_id,))
+                                        conn.commit()
+                                    except Exception as e:
+                                        conn.rollback()
+                                        st.error(f"❌ REVERSAL FAILED: {e}")
+                                    finally:
+                                        release_connection(conn)
+                                    log_activity("SALE REVERSED", f"Sale #{chosen_id} | {chosen_row['product_name']} ({chosen_row['unit_sold']}) | KES {chosen_row['sell_price']:,.0f} | Qty {chosen_row['quantity']} returned to stock")
+                                    st.success(f"✅ REVERSED — {chosen_row['product_name']} stock restored.")
+                                    st.rerun()
+                                else:
+                                    st.error("❌ WRONG PASSWORD")
 
         st.markdown("### 🍺 KEG LIVE LEVEL")
         keg_stk = run_query("SELECT stock FROM products WHERE category = 'KEG' LIMIT 1")
@@ -1183,7 +1193,7 @@ elif page == "🔐 ADMIN VAULT":
                 with act_col1:
                     act_date = st.date_input("Filter by Date", now_eat().date(), key="act_date_filter")
                 with act_col2:
-                    act_type_filter = st.selectbox("Action Type", ["ALL", "STOCK ADDED", "STOCK ADJUSTMENT", "PRODUCT DELETED", "SALE MODIFIED"], key="act_type_filter")
+                    act_type_filter = st.selectbox("Action Type", ["ALL", "STOCK ADDED", "STOCK ADJUSTMENT", "PRODUCT DELETED", "SALE REVERSED"], key="act_type_filter")
 
                 if act_type_filter == "ALL":
                     df_act = run_query("SELECT * FROM activity_log WHERE DATE(timestamp) = %s ORDER BY timestamp DESC", (act_date,))
