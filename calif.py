@@ -16,7 +16,10 @@ import psycopg2.extras
 
 def get_connection():
     db_url = st.secrets["postgres"]["url"]
-    conn = psycopg2.connect(db_url, sslmode='require')
+    # Append sslmode to URL directly to avoid psycopg2 kwarg conflict
+    if "sslmode" not in db_url:
+        db_url += "?sslmode=require"
+    conn = psycopg2.connect(db_url)
     return conn
 
 def init_db():
