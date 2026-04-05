@@ -341,6 +341,11 @@ def run_query(q, params=None):
     finally:
         release_connection(conn)
 
+@st.cache_data(ttl=4)
+def run_query_cached(q, params=None):
+    """For read-only queries where 4s stale data is fine — avoids repeated DB round trips."""
+    return run_query(q, params)
+
 def execute_db(q, params=()):
     conn = get_connection()
     try:
@@ -653,7 +658,9 @@ if page == "🛒 POS TERMINAL":
     # --- SALE LOCK: block all selling while popup is pending ---
     if st.session_state.sale_complete or st.session_state.out_of_stock:
         st.stop()
-    df_p = run_query("SELECT * FROM products")
+    df_p = run_query_cached("SELECT * FROM products")
+    # Load keg settings ONCE here — not inside the product loop
+    keg_settings_df = run_query_cached("SELECT * FROM keg_settings ORDER BY ml ASC")
     if df_p.empty:
         st.error("INVENTORY IS EMPTY. GO TO ADMIN VAULT TO ADD STOCK.")
     else:
@@ -739,9 +746,8 @@ if page == "🛒 POS TERMINAL":
 
                             if category == "KEG":
                                 cost_l = 156.0
-                                ks = run_query("SELECT * FROM keg_settings ORDER BY ml ASC")
-                                if not ks.empty:
-                                    for _, ks_row in ks.iterrows():
+                                if not keg_settings_df.empty:
+                                    for _, ks_row in keg_settings_df.iterrows():
                                         ml_val   = float(ks_row['ml'])
                                         price_val = float(ks_row['price'])
                                         litres   = ml_val / 1000.0
@@ -786,12 +792,14 @@ if page == "🛒 POS TERMINAL":
 # ============================================================
 elif page == "📈 ANALYTICS & PROFIT":
     st.markdown("<h1 style='font-size:clamp(1.5rem,6vw,3rem);'>FINANCIAL INTEL</h1>", unsafe_allow_html=True)
-    df_s = run_query("SELECT * FROM sales")
+    df_s = run_query_cached("SELECT * FROM sales")
 
     if df_s.empty:
         st.warning("NO SALES LOGGED YET.")
     else:
         df_s['timestamp'] = pd.to_datetime(df_s['timestamp'])
+        # Fetch keg stock ONCE before the tab loop
+        keg_stk_analytics = run_query_cached("SELECT stock FROM products WHERE category = 'KEG' LIMIT 1")
         t_d, t_w, t_m = st.tabs(["⚡ DAILY", "📅 WEEKLY", "📊 MONTHLY"])
         analytics_configs = [(t_d, 0, "Daily"), (t_w, 7, "Weekly"), (t_m, 30, "Monthly")]
 
@@ -842,10 +850,9 @@ elif page == "📈 ANALYTICS & PROFIT":
                                          title=f"Top 5 Brands ({label})", color_discrete_sequence=['#CCFF00'])
                         st.plotly_chart(fig_top, use_container_width=True, key=f"top_chart_{label}")
 
-                    # KEG LIVE LEVEL — shown in every tab
-                    keg_stk = run_query("SELECT stock FROM products WHERE category = 'KEG' LIMIT 1")
-                    if not keg_stk.empty:
-                        rem = float(keg_stk.iloc[0]['stock'])
+                    # KEG LIVE LEVEL — shown in every tab, uses pre-fetched data
+                    if not keg_stk_analytics.empty:
+                        rem = float(keg_stk_analytics.iloc[0]['stock'])
                         cur_mtungi = rem % 50 if rem % 50 != 0 else (50 if rem > 0 else 0)
                         fig_gauge = go.Figure(go.Indicator(
                             mode="gauge+number", value=cur_mtungi,
