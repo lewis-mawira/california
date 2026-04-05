@@ -15,11 +15,17 @@ import psycopg2
 import psycopg2.extras
 
 def get_connection():
-    db_url = st.secrets["postgres"]["url"]
-    # Append sslmode to URL directly to avoid psycopg2 kwarg conflict
-    if "sslmode" not in db_url:
-        db_url += "?sslmode=require"
-    conn = psycopg2.connect(db_url)
+    # Use individual params — more reliable than DSN string on Streamlit Cloud
+    pg = st.secrets["postgres"]
+    conn = psycopg2.connect(
+        host=pg["host"],
+        port=int(pg.get("port", 5432)),
+        dbname=pg.get("dbname", "postgres"),
+        user=pg["user"],
+        password=pg["password"],
+        sslmode="require",
+        connect_timeout=10
+    )
     return conn
 
 def init_db():
