@@ -1,37 +1,48 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
-import sqlite3
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import datetime, timedelta, timezone
 import pytz
 
-# --- DATABASE LAYER ---
+# --- DATABASE LAYER (PostgreSQL via Supabase — persistent on Streamlit Cloud) ---
+# Requires: pip install psycopg2-binary
+# Set in Streamlit Cloud Secrets:
+#   [postgres]
+#   url = "postgresql://user:password@db.xxx.supabase.co:5432/postgres"
+import psycopg2
+import psycopg2.extras
+
 def get_connection():
-    return sqlite3.connect('calif_boss_v19.db', check_same_thread=False)
+    db_url = st.secrets["postgres"]["url"]
+    conn = psycopg2.connect(db_url, sslmode='require')
+    return conn
 
 def init_db():
     conn = get_connection()
     c = conn.cursor()
     # product_type: 'Mzinga', 'Quarter', or 'Standard'
     c.execute('''CREATE TABLE IF NOT EXISTS products 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, category TEXT, 
+                 (id SERIAL PRIMARY KEY, name TEXT UNIQUE, category TEXT, 
                   product_type TEXT, buying_price REAL, selling_price REAL, stock REAL,
                   shots_per_bottle REAL DEFAULT 0)''')
     # Add shots_per_bottle column if upgrading existing DB
     try:
-        c.execute("ALTER TABLE products ADD COLUMN shots_per_bottle REAL DEFAULT 0")
+        c.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS shots_per_bottle REAL DEFAULT 0")
     except Exception:
         pass
     # Added 'unit_sold' to track if it was a Full, Half, or Cup
     c.execute('''CREATE TABLE IF NOT EXISTS sales 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, product_name TEXT, category TEXT, quantity REAL, 
+                 (id SERIAL PRIMARY KEY, product_name TEXT, category TEXT, quantity REAL, 
                   unit_sold TEXT, sell_price REAL, buying_price REAL, profit REAL, 
-                  payment_method TEXT, timestamp DATETIME)''')
+                  payment_method TEXT, timestamp TIMESTAMP)''')
     c.execute('''CREATE TABLE IF NOT EXISTS expenses 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, category TEXT, amount REAL, 
-                  description TEXT, timestamp DATETIME)''')
+                 (id SERIAL PRIMARY KEY, category TEXT, amount REAL, 
+                  description TEXT, timestamp TIMESTAMP)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS activity_log 
+                 (id SERIAL PRIMARY KEY, action_type TEXT, description TEXT, 
+                  "user" TEXT DEFAULT 'ADMIN', timestamp TIMESTAMP)''')
     conn.commit()
     conn.close()
 
@@ -246,16 +257,30 @@ if 'vault_unlocked' not in st.session_state: st.session_state.vault_unlocked = F
 if 'out_of_stock' not in st.session_state: st.session_state.out_of_stock = False
 
 # --- UTILITY FUNCTIONS ---
-def run_query(q):
+def run_query(q, params=None):
     conn = get_connection()
-    df = pd.read_sql(q, conn)
+    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    c.execute(q, params or ())
+    rows = c.fetchall()
     conn.close()
-    return df
+    if rows:
+        return pd.DataFrame([dict(r) for r in rows])
+    else:
+        # Return empty DataFrame with correct columns by parsing query
+        return pd.DataFrame()
 
 def execute_db(q, params=()):
     conn = get_connection()
     c = conn.cursor()
     c.execute(q, params)
+    conn.commit()
+    conn.close()
+
+def log_activity(action_type, description):
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("INSERT INTO activity_log (action_type, description, timestamp) VALUES (%s,%s,%s)",
+              (action_type, description, now_eat()))
     conn.commit()
     conn.close()
 
@@ -267,7 +292,7 @@ def now_eat():
 def record_sale(p_id, p_name, cat, qty, s_price, b_price, method, unit):
     # Check stock before selling
     conn = get_connection(); c = conn.cursor()
-    c.execute("SELECT stock FROM products WHERE id = ?", (p_id,))
+    c.execute("SELECT stock FROM products WHERE id = %s", (p_id,))
     row = c.fetchone()
     conn.close()
     if row is None or row[0] < qty:
@@ -277,9 +302,9 @@ def record_sale(p_id, p_name, cat, qty, s_price, b_price, method, unit):
     profit = s_price - b_price
     conn = get_connection(); c = conn.cursor()
     c.execute("""INSERT INTO sales (product_name, category, quantity, unit_sold, sell_price, buying_price, profit, payment_method, timestamp) 
-                 VALUES (?,?,?,?,?,?,?,?,?)""",
+                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
               (p_name, cat, qty, unit, s_price, b_price, profit, method, now_eat()))
-    c.execute("UPDATE products SET stock = stock - ? WHERE id = ?", (qty, p_id))
+    c.execute("UPDATE products SET stock = stock - %s WHERE id = %s", (qty, p_id))
     conn.commit(); conn.close()
     st.session_state.sale_msg = f"{p_name} ({unit}) SOLD FOR KES {s_price:,.0f}/-"
     st.session_state.sale_complete = True
@@ -616,21 +641,21 @@ if page == "🛒 POS TERMINAL":
 
                             if category == "KEG":
                                 cost_l = 156.0
-                                if st.button("JUG (1500ML @ 240/-)", key=f"jug_{row['id']}"):
-                                    if row['stock'] < 1.5:
+                                if st.button("JUG (1200ML @ 240/-)", key=f"jug_{row['id']}"):
+                                    if row['stock'] < 1.2:
                                         st.error("⛔ OUT OF STOCK")
                                     else:
-                                        record_sale(row['id'], row['name'], "KEG", 1.5, 240, (1.5*cost_l), method, "1500ML Jug")
-                                if st.button("CUP KUBWA (500ML @ 80/-)", key=f"kb_{row['id']}"):
-                                    if row['stock'] < 0.5:
+                                        record_sale(row['id'], row['name'], "KEG", 1.2, 240, (1.2*cost_l), method, "1200ML Jug")
+                                if st.button("KEG KUBWA (400ML @ 80/-)", key=f"kb_{row['id']}"):
+                                    if row['stock'] < 0.4:
                                         st.error("⛔ OUT OF STOCK")
                                     else:
-                                        record_sale(row['id'], row['name'], "KEG", 0.5, 80, (0.5*cost_l), method, "500ML Cup")
-                                if st.button("CUP NDOGO (250ML @ 60/-)", key=f"nd_{row['id']}"):
-                                    if row['stock'] < 0.25:
+                                        record_sale(row['id'], row['name'], "KEG", 0.4, 80, (0.4*cost_l), method, "400ML Keg Kubwa")
+                                if st.button("KEG NDOGO (200ML @ 60/-)", key=f"nd_{row['id']}"):
+                                    if row['stock'] < 0.2:
                                         st.error("⛔ OUT OF STOCK")
                                     else:
-                                        record_sale(row['id'], row['name'], "KEG", 0.25, 60, (0.25*cost_l), method, "250ML Cup")
+                                        record_sale(row['id'], row['name'], "KEG", 0.2, 60, (0.2*cost_l), method, "200ML Keg Ndogo")
 
                             elif category == "Spirits" and row['product_type'] == "Nusu":
                                 if st.button("FULL NUSU", key=f"fn_{row['id']}"):
@@ -733,7 +758,7 @@ elif page == "💸 OVERHEADS":
             amt = st.number_input("AMOUNT (KES)", min_value=0)
             note = st.text_input("REMARK")
             if st.form_submit_button("LOCK EXPENSE"):
-                execute_db("INSERT INTO expenses (category, amount, description, timestamp) VALUES (?,?,?,?)",
+                execute_db("INSERT INTO expenses (category, amount, description, timestamp) VALUES (%s,%s,%s,%s)",
                            (cat, amt, note, now_eat()))
                 st.success("✅ EXPENSE SAVED")
                 st.rerun()
@@ -774,11 +799,11 @@ elif page == "💸 OVERHEADS":
                 new_desc = st.text_input("Remark", value=str(row['description']) if row['description'] else "", key=f"edsc_{row['id']}")
                 col_a, col_b = st.columns(2)
                 if col_a.button("💾 UPDATE", key=f"eupd_{row['id']}"):
-                    execute_db("UPDATE expenses SET category=?, amount=?, description=? WHERE id=?",
+                    execute_db("UPDATE expenses SET category=%s, amount=%s, description=%s WHERE id=%s",
                                (new_cat, new_amt, new_desc, row['id']))
                     st.success("UPDATED ✅"); st.rerun()
                 if col_b.button("🗑️ DELETE", key=f"edel_{row['id']}"):
-                    execute_db("DELETE FROM expenses WHERE id=?", (row['id'],))
+                    execute_db("DELETE FROM expenses WHERE id=%s", (row['id'],))
                     st.warning("DELETED"); st.rerun()
 
     st.markdown("---")
@@ -804,7 +829,7 @@ elif page == "🔐 ADMIN VAULT":
             st.session_state.vault_unlocked = False
             st.rerun()
 
-        t1, t2, t3 = st.tabs(["📦 STOCK ENTRY", "🛠️ INVENTORY MGMT", "🌃 CLOSE DAY (EOD)"])
+        t1, t2, t3, t4 = st.tabs(["📦 STOCK ENTRY", "🛠️ INVENTORY MGMT", "🌃 CLOSE DAY (EOD)", "📋 ACTIVITY LOG"])
 
         # ---- TAB 1: STOCK ENTRY ----
         with t1:
@@ -848,11 +873,12 @@ elif page == "🔐 ADMIN VAULT":
                         spb = 0
                     conn = get_connection(); c = conn.cursor()
                     try:
-                        c.execute("INSERT INTO products (name, category, product_type, buying_price, selling_price, stock, shots_per_bottle) VALUES (?,?,?,?,?,?,?)",
+                        c.execute("INSERT INTO products (name, category, product_type, buying_price, selling_price, stock, shots_per_bottle) VALUES (%s,%s,%s,%s,%s,%s,%s)",
                                   (p_name, cat_n, p_type, p_buy, p_sell, final_q, spb))
                     except Exception:
-                        c.execute("UPDATE products SET stock = stock + ? WHERE name = ?", (final_q, p_name))
+                        c.execute("UPDATE products SET stock = stock + %s WHERE name = %s", (final_q, p_name))
                     conn.commit(); conn.close()
+                    log_activity("STOCK ADDED", f"{p_name} | Qty: {final_q} | Buy: {p_buy} | Sell: {p_sell}")
                     st.success(f"✅ UPDATED: {p_name}"); st.rerun()
 
             st.markdown("### CURRENT INVENTORY STATUS")
@@ -873,11 +899,12 @@ elif page == "🔐 ADMIN VAULT":
                         new_spb = st.number_input("Shots per Bottle", value=spb_val, min_value=0.0, key=f"spb_{row['id']}")
                     if st.button("SAVE UPDATES", key=f"btn_{row['id']}"):
                         if row['category'] == 'Shots':
-                            execute_db("UPDATE products SET stock=?, selling_price=?, shots_per_bottle=? WHERE id=?",
+                            execute_db("UPDATE products SET stock=%s, selling_price=%s, shots_per_bottle=%s WHERE id=%s",
                                        (new_s, new_p, new_spb, row['id']))
                         else:
-                            execute_db("UPDATE products SET stock=?, selling_price=? WHERE id=?",
+                            execute_db("UPDATE products SET stock=%s, selling_price=%s WHERE id=%s",
                                        (new_s, new_p, row['id']))
+                        log_activity("STOCK ADJUSTMENT", f"{row['name']} | Stock set to: {new_s} | Price set to: {new_p}")
                         st.rerun()
                     st.markdown("---")
                     st.markdown("<span style='color:red; font-size:0.8rem;'>⚠️ DANGER: DELETE THIS PRODUCT</span>", unsafe_allow_html=True)
@@ -891,7 +918,8 @@ elif page == "🔐 ADMIN VAULT":
                         d1, d2 = st.columns(2)
                         if d1.button("✅ CONFIRM DELETE", key=f"delconf_{row['id']}"):
                             if del_pin == "nesh001":
-                                execute_db("DELETE FROM products WHERE id=?", (row['id'],))
+                                execute_db("DELETE FROM products WHERE id=%s", (row['id'],))
+                                log_activity("PRODUCT DELETED", f"{row['name']} | Category: {row['category']} | Type: {row['product_type']}")
                                 st.session_state[del_key] = False
                                 st.success(f"✅ {row['name']} DELETED")
                                 st.rerun()
@@ -904,11 +932,26 @@ elif page == "🔐 ADMIN VAULT":
         # ---- TAB 3: END OF DAY (DETAILED) ----
         with t3:
             st.markdown("### 🌃 END OF DAY RECONCILIATION")
-            date_check = st.date_input("Select Date", now_eat().date())
-            df_day = run_query(f"SELECT * FROM sales WHERE date(timestamp) = '{date_check}'")
+
+            eod_mode = st.radio("VIEW MODE", ["📅 BY CALENDAR DATE", "🌃 BY BUSINESS DAY (8AM–3AM)"], horizontal=True)
+
+            if eod_mode == "📅 BY CALENDAR DATE":
+                date_check = st.date_input("Select Date", now_eat().date())
+                df_day = run_query("SELECT * FROM sales WHERE DATE(timestamp) = %s", (date_check,))
+                eod_label = str(date_check)
+            else:
+                # Business day: 8AM on selected date to 3AM the following day
+                biz_date = st.date_input("Select Business Day (opening date)", now_eat().date())
+                biz_start = datetime.combine(biz_date, datetime.min.time()).replace(hour=8, minute=0, second=0)
+                biz_end   = biz_start + timedelta(hours=19)  # 8AM + 19h = 3AM next day
+                df_day = run_query(
+                    "SELECT * FROM sales WHERE timestamp >= %s AND timestamp < %s",
+                    (biz_start, biz_end)
+                )
+                eod_label = f"{biz_date} (8:00AM → {(biz_date + timedelta(days=1))} 3:00AM)"
 
             if df_day.empty:
-                st.warning("NO SALES DATA FOR THIS DATE.")
+                st.warning("NO SALES DATA FOR THIS PERIOD.")
             else:
                 # ---- EOD Calculations ----
                 total_sales  = df_day['sell_price'].sum()
@@ -946,7 +989,7 @@ elif page == "🔐 ADMIN VAULT":
                 # ---- Full EOD Summary Card ----
                 st.markdown(f"""
                 <div class="eod-card">
-                    <h2 style="color:#CCFF00; margin:0 0 5px;">🌃 EOD REPORT: {date_check}</h2>
+                    <h2 style="color:#CCFF00; margin:0 0 5px;">🌃 EOD REPORT: {eod_label}</h2>
                     <hr style="border:2px solid #333; margin: 8px 0;">
                     <div class="eod-row">
                         <div class="eod-cell">
@@ -987,7 +1030,7 @@ elif page == "🔐 ADMIN VAULT":
                 st.markdown("### 📊 SALES BY CATEGORY TODAY")
                 cat_breakdown = df_day.groupby('category')['sell_price'].sum().reset_index()
                 fig_cat = px.pie(cat_breakdown, values='sell_price', names='category',
-                                 title=f"Revenue by Category — {date_check}",
+                                 title=f"Revenue by Category — {eod_label}",
                                  color_discrete_sequence=['#2563EB', '#FF007A', '#CCFF00', '#000000', '#2ECC71', '#E0E0E0', '#FF6B6B'])
                 st.plotly_chart(fig_cat, use_container_width=True, key="eod_pie")
 
@@ -997,3 +1040,73 @@ elif page == "🔐 ADMIN VAULT":
                                  color='payment_method',
                                  color_discrete_map={'CASH': '#CCFF00', 'M-PESA': '#2ECC71'})
                 st.plotly_chart(fig_pay, use_container_width=True, key="eod_pay_bar")
+        # ---- TAB 4: ACTIVITY LOG ----
+        with t4:
+            st.markdown("### 📋 DAILY ACTIVITY LOG")
+            st.caption("Stock additions, deletions, adjustments — all non-sale admin actions are recorded here.")
+
+            if 'activity_log_unlocked' not in st.session_state:
+                st.session_state.activity_log_unlocked = False
+
+            if not st.session_state.activity_log_unlocked:
+                st.markdown("<div class='neo-card'><h3>🔒 ACTIVITY LOG LOCKED</h3>", unsafe_allow_html=True)
+                act_pin = st.text_input("ENTER PASSWORD TO VIEW ACTIVITY LOG", type="password", key="activity_pin_input")
+                if st.button("UNLOCK ACTIVITY LOG", key="unlock_activity_btn"):
+                    if act_pin == "nesh001":
+                        st.session_state.activity_log_unlocked = True
+                        st.rerun()
+                    else:
+                        st.error("❌ WRONG PASSWORD")
+                st.markdown("</div>", unsafe_allow_html=True)
+            else:
+                if st.button("🔒 LOCK ACTIVITY LOG", key="lock_activity_btn"):
+                    st.session_state.activity_log_unlocked = False
+                    st.rerun()
+
+                act_col1, act_col2 = st.columns([2, 1])
+                with act_col1:
+                    act_date = st.date_input("Filter by Date", now_eat().date(), key="act_date_filter")
+                with act_col2:
+                    act_type_filter = st.selectbox("Action Type", ["ALL", "STOCK ADDED", "STOCK ADJUSTMENT", "PRODUCT DELETED"], key="act_type_filter")
+
+                if act_type_filter == "ALL":
+                    df_act = run_query("SELECT * FROM activity_log WHERE DATE(timestamp) = %s ORDER BY timestamp DESC", (act_date,))
+                else:
+                    df_act = run_query("SELECT * FROM activity_log WHERE DATE(timestamp) = %s AND action_type = %s ORDER BY timestamp DESC", (act_date, act_type_filter))
+
+                if df_act.empty:
+                    st.info("NO ACTIVITY RECORDED FOR THIS DATE / FILTER.")
+                else:
+                    # Summary counts
+                    added_count   = len(df_act[df_act['action_type'] == 'STOCK ADDED'])
+                    adjust_count  = len(df_act[df_act['action_type'] == 'STOCK ADJUSTMENT'])
+                    deleted_count = len(df_act[df_act['action_type'] == 'PRODUCT DELETED'])
+                    st.markdown(f"""
+                    <div class="metric-grid">
+                        <div class="metric-card mc-keg">
+                            <div class="m-label">📦 STOCK ADDED</div>
+                            <div class="m-value">{added_count}</div>
+                        </div>
+                        <div class="metric-card mc-cash">
+                            <div class="m-label">✏️ ADJUSTMENTS</div>
+                            <div class="m-value">{adjust_count}</div>
+                        </div>
+                        <div class="metric-card mc-profit">
+                            <div class="m-label">🗑️ DELETED</div>
+                            <div class="m-value">{deleted_count}</div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    for _, arow in df_act.iterrows():
+                        ts_str = pd.to_datetime(arow['timestamp']).strftime('%d %b %Y %H:%M:%S') if arow['timestamp'] else "—"
+                        icon = "📦" if arow['action_type'] == "STOCK ADDED" else ("🗑️" if arow['action_type'] == "PRODUCT DELETED" else "✏️")
+                        color = "#CCFF00" if arow['action_type'] == "STOCK ADDED" else ("#FF007A" if arow['action_type'] == "PRODUCT DELETED" else "#2563EB")
+                        st.markdown(f"""
+                        <div style="background:black; border:3px solid {color}; padding:10px 14px; margin-bottom:8px; box-shadow:4px 4px 0px {color};">
+                            <span style="color:{color}; font-size:0.7rem; letter-spacing:2px; text-transform:uppercase;">{icon} {arow['action_type']}</span>
+                            <span style="color:#888; font-size:0.65rem; float:right;">{ts_str}</span>
+                            <br>
+                            <span style="color:white; font-size:0.85rem;">{arow['description']}</span>
+                        </div>
+                        """, unsafe_allow_html=True)
