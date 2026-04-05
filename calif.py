@@ -57,6 +57,15 @@ def init_db():
         c.execute('''CREATE TABLE IF NOT EXISTS activity_log 
                      (id SERIAL PRIMARY KEY, action_type TEXT, description TEXT, 
                       "user" TEXT DEFAULT 'ADMIN', timestamp TIMESTAMP)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS keg_settings
+                     (id SERIAL PRIMARY KEY, size_name TEXT UNIQUE, ml REAL, price REAL)''')
+        # Insert defaults if not present
+        c.execute("""INSERT INTO keg_settings (size_name, ml, price) VALUES ('ndogo', 200, 60)
+                     ON CONFLICT (size_name) DO NOTHING""")
+        c.execute("""INSERT INTO keg_settings (size_name, ml, price) VALUES ('kubwa', 400, 80)
+                     ON CONFLICT (size_name) DO NOTHING""")
+        c.execute("""INSERT INTO keg_settings (size_name, ml, price) VALUES ('jug', 1200, 240)
+                     ON CONFLICT (size_name) DO NOTHING""")
         conn.commit()
     except Exception as e:
         conn.rollback()
@@ -241,6 +250,46 @@ st.markdown("""
 
     /* ===== MISC ===== */
     .stDataFrame { border: 4px solid black !important; }
+
+    /* ===== HOVER EFFECTS ===== */
+    .neo-card {
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+        cursor: default;
+    }
+    .neo-card:hover {
+        transform: translate(-3px, -3px);
+        box-shadow: 12px 12px 0px #FF007A !important;
+    }
+    .metric-card {
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .metric-card:hover {
+        transform: translate(-2px, -2px);
+        box-shadow: 10px 10px 0px #FF007A !important;
+    }
+    .kpi-box {
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .kpi-box:hover {
+        transform: translate(-3px, -3px);
+        box-shadow: 10px 10px 0px black !important;
+    }
+    .eod-card {
+        transition: box-shadow 0.2s ease;
+    }
+    .eod-card:hover {
+        box-shadow: 16px 16px 0px #FF007A !important;
+    }
+    /* Expander hover */
+    [data-testid="stExpander"]:hover {
+        border-color: #FF007A !important;
+        box-shadow: 4px 4px 0px #FF007A;
+    }
+    /* Tab hover */
+    [data-testid="stTab"]:hover {
+        background: #CCFF00 !important;
+        color: black !important;
+    }
 
     /* ===== EXPENSE EDITOR CARDS ===== */
     .expense-editor-card {
@@ -601,6 +650,9 @@ with st.sidebar:
 # --- 🛒 1. POS TERMINAL ---
 # ============================================================
 if page == "🛒 POS TERMINAL":
+    # --- SALE LOCK: block all selling while popup is pending ---
+    if st.session_state.sale_complete or st.session_state.out_of_stock:
+        st.stop()
     df_p = run_query("SELECT * FROM products")
     if df_p.empty:
         st.error("INVENTORY IS EMPTY. GO TO ADMIN VAULT TO ADD STOCK.")
@@ -687,24 +739,21 @@ if page == "🛒 POS TERMINAL":
 
                             if category == "KEG":
                                 cost_l = 156.0
-                                if st.button("JUG (1200ML @ 240/-)", key=f"jug_{row['id']}"):
-                                    if row['stock'] < 1.2:
-                                        st.error("⛔ OUT OF STOCK")
-                                    else:
-                                        record_sale(row['id'], row['name'], "KEG", 1.2, 240, (1.2*cost_l), method, "1200ML Jug")
-                                        st.rerun()
-                                if st.button("KEG KUBWA (400ML @ 80/-)", key=f"kb_{row['id']}"):
-                                    if row['stock'] < 0.4:
-                                        st.error("⛔ OUT OF STOCK")
-                                    else:
-                                        record_sale(row['id'], row['name'], "KEG", 0.4, 80, (0.4*cost_l), method, "400ML Keg Kubwa")
-                                        st.rerun()
-                                if st.button("KEG NDOGO (200ML @ 60/-)", key=f"nd_{row['id']}"):
-                                    if row['stock'] < 0.2:
-                                        st.error("⛔ OUT OF STOCK")
-                                    else:
-                                        record_sale(row['id'], row['name'], "KEG", 0.2, 60, (0.2*cost_l), method, "200ML Keg Ndogo")
-                                        st.rerun()
+                                ks = run_query("SELECT * FROM keg_settings ORDER BY ml ASC")
+                                if not ks.empty:
+                                    for _, ks_row in ks.iterrows():
+                                        ml_val   = float(ks_row['ml'])
+                                        price_val = float(ks_row['price'])
+                                        litres   = ml_val / 1000.0
+                                        label_str = ks_row['size_name'].upper()
+                                        btn_label = f"{label_str} ({int(ml_val)}ML @ {int(price_val)}/-)"
+                                        if st.button(btn_label, key=f"keg_{ks_row['size_name']}_{row['id']}"):
+                                            if row['stock'] < litres:
+                                                st.error("⛔ OUT OF STOCK")
+                                            else:
+                                                record_sale(row['id'], row['name'], "KEG", litres, price_val,
+                                                            litres * cost_l, method, f"{int(ml_val)}ML {label_str}")
+                                                st.rerun()
 
                             elif category == "Spirits" and row['product_type'] == "Nusu":
                                 if st.button("FULL NUSU", key=f"fn_{row['id']}"):
@@ -748,8 +797,13 @@ elif page == "📈 ANALYTICS & PROFIT":
 
         for tab, days, label in analytics_configs:
             with tab:
-                start_date = (datetime.now() - timedelta(days=days)).date() if days > 0 else datetime.now().date()
-                v_s = df_s[df_s['timestamp'].dt.date >= start_date]
+                today_eat = now_eat().date()
+                if days == 0:
+                    # Daily: today only
+                    v_s = df_s[df_s['timestamp'].dt.date == today_eat]
+                else:
+                    start_date = (now_eat() - timedelta(days=days)).date()
+                    v_s = df_s[df_s['timestamp'].dt.date >= start_date]
 
                 rev   = v_s['sell_price'].sum()
                 prof  = v_s['profit'].sum()
@@ -765,19 +819,42 @@ elif page == "📈 ANALYTICS & PROFIT":
                 </div>
                 """, unsafe_allow_html=True)
 
-                c1, c2 = st.columns(2)
-                with c1:
-                    chart_df = v_s.groupby(v_s['timestamp'].dt.date)[['sell_price', 'profit']].sum().reset_index()
-                    fig = px.bar(chart_df, x='timestamp', y=['sell_price', 'profit'], barmode='group',
-                                 title=f"{label} Sales vs Profit", color_discrete_sequence=['#2563EB', '#FF007A'])
-                    st.plotly_chart(fig, use_container_width=True, key=f"sales_chart_{label}")
-                with c2:
-                    top_sellers = v_s.groupby('product_name')['sell_price'].sum().sort_values(ascending=False).head(5).reset_index()
-                    fig_top = px.bar(top_sellers, x='sell_price', y='product_name', orientation='h',
-                                     title="Top 5 Brands", color_discrete_sequence=['#CCFF00'])
-                    st.plotly_chart(fig_top, use_container_width=True, key=f"top_chart_{label}")
+                if v_s.empty:
+                    st.info(f"No sales data for this {label.lower()} period.")
+                else:
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if days == 0:
+                            # Daily: group by hour
+                            chart_df = v_s.copy()
+                            chart_df['hour'] = chart_df['timestamp'].dt.strftime('%H:00')
+                            chart_df = chart_df.groupby('hour')[['sell_price', 'profit']].sum().reset_index()
+                            fig = px.bar(chart_df, x='hour', y=['sell_price', 'profit'], barmode='group',
+                                         title="Today — Sales by Hour", color_discrete_sequence=['#2563EB', '#FF007A'])
+                        else:
+                            chart_df = v_s.groupby(v_s['timestamp'].dt.date)[['sell_price', 'profit']].sum().reset_index()
+                            fig = px.bar(chart_df, x='timestamp', y=['sell_price', 'profit'], barmode='group',
+                                         title=f"{label} Sales vs Profit", color_discrete_sequence=['#2563EB', '#FF007A'])
+                        st.plotly_chart(fig, use_container_width=True, key=f"sales_chart_{label}")
+                    with c2:
+                        top_sellers = v_s.groupby('product_name')['sell_price'].sum().sort_values(ascending=False).head(5).reset_index()
+                        fig_top = px.bar(top_sellers, x='sell_price', y='product_name', orientation='h',
+                                         title=f"Top 5 Brands ({label})", color_discrete_sequence=['#CCFF00'])
+                        st.plotly_chart(fig_top, use_container_width=True, key=f"top_chart_{label}")
 
-                # Daily transaction log
+                    # KEG LIVE LEVEL — shown in every tab
+                    keg_stk = run_query("SELECT stock FROM products WHERE category = 'KEG' LIMIT 1")
+                    if not keg_stk.empty:
+                        rem = float(keg_stk.iloc[0]['stock'])
+                        cur_mtungi = rem % 50 if rem % 50 != 0 else (50 if rem > 0 else 0)
+                        fig_gauge = go.Figure(go.Indicator(
+                            mode="gauge+number", value=cur_mtungi,
+                            title={'text': f"🍺 KEG LITRES LEFT (Total: {rem:.1f}L)"},
+                            gauge={'axis': {'range': [0, 50]}, 'bar': {'color': "#CCFF00"}, 'bgcolor': "black"}
+                        ))
+                        st.plotly_chart(fig_gauge, use_container_width=True, key=f"keg_gauge_{label}")
+
+                # Transaction log — daily only shows today's + reversal
                 if label == "Daily":
                     st.markdown("### 📋 TODAY'S TRANSACTION LOG")
                     if v_s.empty:
@@ -812,34 +889,37 @@ elif page == "📈 ANALYTICS & PROFIT":
                                     conn = get_connection()
                                     try:
                                         c = conn.cursor()
-                                        # Restore stock to the product
+                                        qty_to_restore = float(chosen_row['quantity'])
+                                        product_name   = str(chosen_row['product_name'])
+                                        sale_id        = int(chosen_id)
                                         c.execute("UPDATE products SET stock = stock + %s WHERE name = %s",
-                                                  (chosen_row['quantity'], chosen_row['product_name']))
-                                        # Delete the sale record
-                                        c.execute("DELETE FROM sales WHERE id = %s", (chosen_id,))
+                                                  (qty_to_restore, product_name))
+                                        c.execute("DELETE FROM sales WHERE id = %s", (sale_id,))
                                         conn.commit()
+                                        log_activity("SALE REVERSED", f"Sale #{sale_id} | {product_name} ({chosen_row['unit_sold']}) | KES {chosen_row['sell_price']:,.0f} | Qty {qty_to_restore} returned to stock")
+                                        st.success(f"✅ REVERSED — {product_name} stock restored by {qty_to_restore} units.")
+                                        st.rerun()
                                     except Exception as e:
                                         conn.rollback()
                                         st.error(f"❌ REVERSAL FAILED: {e}")
                                     finally:
                                         release_connection(conn)
-                                    log_activity("SALE REVERSED", f"Sale #{chosen_id} | {chosen_row['product_name']} ({chosen_row['unit_sold']}) | KES {chosen_row['sell_price']:,.0f} | Qty {chosen_row['quantity']} returned to stock")
-                                    st.success(f"✅ REVERSED — {chosen_row['product_name']} stock restored.")
-                                    st.rerun()
                                 else:
                                     st.error("❌ WRONG PASSWORD")
-
-        st.markdown("### 🍺 KEG LIVE LEVEL")
-        keg_stk = run_query("SELECT stock FROM products WHERE category = 'KEG' LIMIT 1")
-        if not keg_stk.empty:
-            rem = keg_stk.iloc[0]['stock']
-            cur_mtungi = rem % 50 if rem % 50 != 0 else (50 if rem > 0 else 0)
-            fig_gauge = go.Figure(go.Indicator(
-                mode="gauge+number", value=cur_mtungi,
-                title={'text': f"LITRES LEFT (Total: {rem:.1f}L)"},
-                gauge={'axis': {'range': [0, 50]}, 'bar': {'color': "#CCFF00"}, 'bgcolor': "black"}
-            ))
-            st.plotly_chart(fig_gauge, use_container_width=True, key="keg_gauge")
+                elif label == "Weekly":
+                    st.markdown("### 📋 THIS WEEK'S TRANSACTIONS")
+                    if not v_s.empty:
+                        st.dataframe(
+                            v_s[['timestamp', 'product_name', 'category', 'unit_sold', 'quantity', 'sell_price', 'profit', 'payment_method']].sort_values('timestamp', ascending=False),
+                            use_container_width=True
+                        )
+                else:
+                    st.markdown("### 📋 THIS MONTH'S TRANSACTIONS")
+                    if not v_s.empty:
+                        st.dataframe(
+                            v_s[['timestamp', 'product_name', 'category', 'unit_sold', 'quantity', 'sell_price', 'profit', 'payment_method']].sort_values('timestamp', ascending=False),
+                            use_container_width=True
+                        )
 
 # ============================================================
 # --- 💸 3. OVERHEADS (WITH EXPENSE EDITOR) ---
@@ -987,58 +1067,131 @@ elif page == "🔐 ADMIN VAULT":
             st.dataframe(run_query("SELECT name, category, product_type, stock, buying_price, selling_price FROM products"),
                          use_container_width=True)
 
+            st.markdown("---")
+            st.markdown("### 🍺 KEG SIZE & PRICE SETTINGS")
+            st.caption("Adjust the ML and price for each keg serving size.")
+            ks_df = run_query("SELECT * FROM keg_settings ORDER BY ml ASC")
+            if not ks_df.empty:
+                for _, ks_row in ks_df.iterrows():
+                    with st.expander(f"⚙️ {ks_row['size_name'].upper()} — {int(ks_row['ml'])}ml @ KES {int(ks_row['price'])}"):
+                        ka, kb = st.columns(2)
+                        new_ml    = ka.number_input("ML", value=float(ks_row['ml']),    min_value=10.0, step=10.0, key=f"kml_{ks_row['id']}")
+                        new_kprice = kb.number_input("Price (KES)", value=float(ks_row['price']), min_value=1.0, key=f"kpr_{ks_row['id']}")
+                        if st.button("UPDATE KEG SIZE", key=f"ksave_{ks_row['id']}"):
+                            execute_db("UPDATE keg_settings SET ml=%s, price=%s WHERE id=%s",
+                                       (new_ml, new_kprice, int(ks_row['id'])))
+                            log_activity("KEG SETTING CHANGED", f"{ks_row['size_name'].upper()}: {ks_row['ml']}ml@{ks_row['price']} → {new_ml}ml@{new_kprice}")
+                            st.success(f"✅ {ks_row['size_name'].upper()} updated")
+                            st.rerun()
+
         # ---- TAB 2: INVENTORY MANAGEMENT ----
         with t2:
-            st.markdown("### UPDATE STOCK LEVELS")
-            df_m = run_query("SELECT * FROM products")
-            for _, row in df_m.iterrows():
-                with st.expander(f"✏️ EDIT: {row['name']} ({row['product_type']})"):
-                    new_name = st.text_input("Product Name", value=str(row['name']), key=f"nm_{row['id']}")
-                    c_a, c_b = st.columns(2)
-                    new_s   = c_a.number_input("Update Stock Count",    value=float(row['stock']),         key=f"s_{row['id']}")
-                    new_p   = c_b.number_input("Update Selling Price",  value=float(row['selling_price']), key=f"p_{row['id']}")
-                    c_c, c_d = st.columns(2)
-                    new_bp  = c_c.number_input("Update Buying Price",   value=float(row['buying_price']),  key=f"bp_{row['id']}")
-                    if row['category'] == 'Shots':
-                        spb_val = float(row['shots_per_bottle']) if row['shots_per_bottle'] else 0.0
-                        new_spb = c_d.number_input("Shots per Bottle", value=spb_val, min_value=0.0, key=f"spb_{row['id']}")
-                    if st.button("SAVE UPDATES", key=f"btn_{row['id']}"):
-                        changes = []
-                        if new_name != row['name']: changes.append(f"Name: {row['name']} → {new_name}")
-                        if new_s != row['stock']: changes.append(f"Stock: {row['stock']} → {new_s}")
-                        if new_p != row['selling_price']: changes.append(f"Sell Price: {row['selling_price']} → {new_p}")
-                        if new_bp != row['buying_price']: changes.append(f"Buy Price: {row['buying_price']} → {new_bp}")
-                        if row['category'] == 'Shots':
-                            execute_db("UPDATE products SET name=%s, stock=%s, selling_price=%s, buying_price=%s, shots_per_bottle=%s WHERE id=%s",
-                                       (new_name, new_s, new_p, new_bp, new_spb, row['id']))
-                            if new_spb != spb_val: changes.append(f"Shots/Bottle: {spb_val} → {new_spb}")
-                        else:
-                            execute_db("UPDATE products SET name=%s, stock=%s, selling_price=%s, buying_price=%s WHERE id=%s",
-                                       (new_name, new_s, new_p, new_bp, row['id']))
-                        log_activity("STOCK ADJUSTMENT", f"{row['name']} | {' | '.join(changes) if changes else 'No changes'}")
-                        st.rerun()
-                    st.markdown("---")
-                    st.markdown("<span style='color:red; font-size:0.8rem;'>⚠️ DANGER: DELETE THIS PRODUCT</span>", unsafe_allow_html=True)
-                    del_key = f"del_confirm_{row['id']}"
-                    if del_key not in st.session_state:
-                        st.session_state[del_key] = False
-                    if st.button("🗑️ DELETE PRODUCT", key=f"delbtn_{row['id']}"):
-                        st.session_state[del_key] = True
-                    if st.session_state.get(del_key):
-                        del_pin = st.text_input("Enter password to confirm deletion:", type="password", key=f"delpin_{row['id']}")
-                        d1, d2 = st.columns(2)
-                        if d1.button("✅ CONFIRM DELETE", key=f"delconf_{row['id']}"):
-                            if del_pin == "nesh001":
-                                execute_db("DELETE FROM products WHERE id=%s", (row['id'],))
-                                log_activity("PRODUCT DELETED", f"{row['name']} | Category: {row['category']} | Type: {row['product_type']}")
-                                st.session_state[del_key] = False
-                                st.success(f"✅ {row['name']} DELETED")
-                                st.rerun()
-                            else:
-                                st.error("❌ WRONG PASSWORD")
-                        if d2.button("❌ CANCEL", key=f"delcancel_{row['id']}"):
-                            st.session_state[del_key] = False
-                            st.rerun()
+            inv_tab1, inv_tab2, inv_tab3 = st.tabs(["✏️ EDIT PRODUCTS", "📊 TODAY vs YESTERDAY", "📅 DAILY CLOSING SNAPSHOT"])
+
+            with inv_tab1:
+                st.markdown("### INVENTORY BY CATEGORY")
+                df_m = run_query("SELECT * FROM products ORDER BY category, name")
+                if df_m.empty:
+                    st.info("No products in inventory.")
+                else:
+                    cats_inv = df_m['category'].unique().tolist()
+                    for cat_inv in cats_inv:
+                        st.markdown(f"<div style='background:black;color:#CCFF00;padding:6px 12px;font-size:0.8rem;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;'>📦 {cat_inv}</div>", unsafe_allow_html=True)
+                        cat_items = df_m[df_m['category'] == cat_inv]
+                        for _, row in cat_items.iterrows():
+                            stk_warn = " 🔴" if float(row['stock']) < 2 else ""
+                            with st.expander(f"✏️ {row['name']} | STK: {row['stock']:.2f}{stk_warn} | SELL: {row['selling_price']:,.0f}"):
+                                new_name = st.text_input("Product Name", value=str(row['name']), key=f"nm_{row['id']}")
+                                c_a, c_b = st.columns(2)
+                                new_s   = c_a.number_input("Stock Count",    value=float(row['stock']),         key=f"s_{row['id']}")
+                                new_p   = c_b.number_input("Selling Price",  value=float(row['selling_price']), key=f"p_{row['id']}")
+                                c_c, c_d = st.columns(2)
+                                new_bp  = c_c.number_input("Buying Price",   value=float(row['buying_price']),  key=f"bp_{row['id']}")
+                                if row['category'] == 'Shots':
+                                    spb_val = float(row['shots_per_bottle']) if row['shots_per_bottle'] else 0.0
+                                    new_spb = c_d.number_input("Shots per Bottle", value=spb_val, min_value=0.0, key=f"spb_{row['id']}")
+                                if st.button("SAVE UPDATES", key=f"btn_{row['id']}"):
+                                    changes = []
+                                    if new_name != row['name']: changes.append(f"Name: {row['name']} → {new_name}")
+                                    if new_s != row['stock']: changes.append(f"Stock: {row['stock']} → {new_s}")
+                                    if new_p != row['selling_price']: changes.append(f"Sell: {row['selling_price']} → {new_p}")
+                                    if new_bp != row['buying_price']: changes.append(f"Buy: {row['buying_price']} → {new_bp}")
+                                    if row['category'] == 'Shots':
+                                        execute_db("UPDATE products SET name=%s, stock=%s, selling_price=%s, buying_price=%s, shots_per_bottle=%s WHERE id=%s",
+                                                   (new_name, new_s, new_p, new_bp, new_spb, int(row['id'])))
+                                        if new_spb != spb_val: changes.append(f"Shots/Bottle: {spb_val} → {new_spb}")
+                                    else:
+                                        execute_db("UPDATE products SET name=%s, stock=%s, selling_price=%s, buying_price=%s WHERE id=%s",
+                                                   (new_name, new_s, new_p, new_bp, int(row['id'])))
+                                    log_activity("STOCK ADJUSTMENT", f"{row['name']} | {' | '.join(changes) if changes else 'No changes'}")
+                                    st.success("✅ SAVED"); st.rerun()
+                                st.markdown("---")
+                                st.markdown("<span style='color:red; font-size:0.8rem;'>⚠️ DANGER: DELETE THIS PRODUCT</span>", unsafe_allow_html=True)
+                                del_key = f"del_confirm_{row['id']}"
+                                if del_key not in st.session_state:
+                                    st.session_state[del_key] = False
+                                if st.button("🗑️ DELETE PRODUCT", key=f"delbtn_{row['id']}"):
+                                    st.session_state[del_key] = True
+                                if st.session_state.get(del_key):
+                                    del_pin = st.text_input("Enter password to confirm deletion:", type="password", key=f"delpin_{row['id']}")
+                                    d1, d2 = st.columns(2)
+                                    if d1.button("✅ CONFIRM DELETE", key=f"delconf_{row['id']}"):
+                                        if del_pin == "nesh001":
+                                            execute_db("DELETE FROM products WHERE id=%s", (int(row['id']),))
+                                            log_activity("PRODUCT DELETED", f"{row['name']} | Category: {row['category']} | Type: {row['product_type']}")
+                                            st.session_state[del_key] = False
+                                            st.success(f"✅ {row['name']} DELETED")
+                                            st.rerun()
+                                        else:
+                                            st.error("❌ WRONG PASSWORD")
+                                    if d2.button("❌ CANCEL", key=f"delcancel_{row['id']}"):
+                                        st.session_state[del_key] = False
+                                        st.rerun()
+
+            with inv_tab2:
+                st.markdown("### 📊 TODAY vs YESTERDAY — STOCK MOVEMENT")
+                df_all_sales = run_query("SELECT * FROM sales")
+                df_prod      = run_query("SELECT * FROM products")
+                if df_all_sales.empty or df_prod.empty:
+                    st.info("Not enough data yet.")
+                else:
+                    df_all_sales['timestamp'] = pd.to_datetime(df_all_sales['timestamp'])
+                    today_dt    = now_eat().date()
+                    yesterday_dt = today_dt - timedelta(days=1)
+                    today_sales = df_all_sales[df_all_sales['timestamp'].dt.date == today_dt]
+                    yest_sales  = df_all_sales[df_all_sales['timestamp'].dt.date == yesterday_dt]
+                    today_qty   = today_sales.groupby('product_name')['quantity'].sum().rename('today_sold')
+                    yest_qty    = yest_sales.groupby('product_name')['quantity'].sum().rename('yesterday_sold')
+                    compare_df  = df_prod[['name', 'category', 'stock']].set_index('name')
+                    compare_df  = compare_df.join(today_qty, how='left').join(yest_qty, how='left').fillna(0).reset_index()
+                    compare_df.columns = ['Product', 'Category', 'Current Stock', 'Today Sold', 'Yesterday Sold']
+                    compare_df['Δ vs Yesterday'] = compare_df['Today Sold'] - compare_df['Yesterday Sold']
+                    st.dataframe(compare_df.sort_values('Today Sold', ascending=False), use_container_width=True)
+                    fig_comp = px.bar(compare_df[compare_df['Today Sold'] + compare_df['Yesterday Sold'] > 0],
+                                      x='Product', y=['Today Sold', 'Yesterday Sold'],
+                                      barmode='group', title="Today vs Yesterday Sales by Product",
+                                      color_discrete_sequence=['#CCFF00', '#2563EB'])
+                    st.plotly_chart(fig_comp, use_container_width=True, key="compare_chart")
+
+            with inv_tab3:
+                st.markdown("### 📅 DAILY CLOSING STOCK SNAPSHOT")
+                st.caption("Select a date to see estimated closing stock — current stock plus all sales made on that day.")
+                snap_date = st.date_input("Select Date", now_eat().date(), key="snap_date")
+                df_snap_sales = run_query("SELECT product_name, SUM(quantity) as qty_sold FROM sales WHERE DATE(timestamp) = %s GROUP BY product_name", (snap_date,))
+                df_snap_prod  = run_query("SELECT name, category, stock, selling_price FROM products")
+                if df_snap_prod.empty:
+                    st.info("No inventory data.")
+                else:
+                    if df_snap_sales.empty:
+                        df_snap_prod['qty_sold_that_day'] = 0
+                        df_snap_prod['closing_stock'] = df_snap_prod['stock']
+                    else:
+                        df_snap_prod = df_snap_prod.merge(df_snap_sales.rename(columns={'product_name': 'name'}), on='name', how='left').fillna(0)
+                        df_snap_prod['qty_sold_that_day'] = df_snap_prod['qty_sold']
+                        df_snap_prod['closing_stock'] = df_snap_prod['stock'] + df_snap_prod['qty_sold_that_day']
+                    display_snap = df_snap_prod[['name', 'category', 'closing_stock', 'qty_sold_that_day', 'stock']].copy()
+                    display_snap.columns = ['Product', 'Category', 'Est. Closing Stock', 'Sold That Day', 'Current Stock']
+                    st.dataframe(display_snap.sort_values('Category'), use_container_width=True)
 
         # ---- TAB 3: END OF DAY (DETAILED) ----
         with t3:
@@ -1166,6 +1319,21 @@ elif page == "🔐 ADMIN VAULT":
                                  color='payment_method',
                                  color_discrete_map={'CASH': '#CCFF00', 'M-PESA': '#2ECC71'})
                 st.plotly_chart(fig_pay, use_container_width=True, key="eod_pay_bar")
+
+                # Low stock warning
+                st.markdown("### ⚠️ LOW STOCK ALERT (Remaining < 2)")
+                df_low = run_query("SELECT name, category, stock FROM products WHERE stock < 2 ORDER BY stock ASC")
+                if df_low.empty:
+                    st.success("✅ All products have sufficient stock.")
+                else:
+                    for _, lrow in df_low.iterrows():
+                        st.markdown(f"""
+                        <div style="background:#FF007A; border:3px solid black; padding:8px 14px; margin-bottom:6px; box-shadow:3px 3px 0px black; display:flex; justify-content:space-between; align-items:center;">
+                            <span style="color:white; font-weight:900; font-size:0.9rem;">🔴 {lrow['name']}</span>
+                            <span style="color:black; background:#CCFF00; padding:2px 10px; font-size:0.8rem; font-weight:900;">{lrow['category']}</span>
+                            <span style="color:white; font-size:0.9rem;">STK: <b>{lrow['stock']:.2f}</b></span>
+                        </div>
+                        """, unsafe_allow_html=True)
         # ---- TAB 4: ACTIVITY LOG ----
         with t4:
             st.markdown("### 📋 DAILY ACTIVITY LOG")
@@ -1250,7 +1418,7 @@ st.markdown("""
     font-family: 'Space Mono', monospace;
 ">
     <span style="color:#CCFF00; font-size:0.75rem; letter-spacing:2px; text-transform:uppercase;">
-        © 2026 Quinn Productions. ALL RIGHTS RESERVED.
+        © 2026 LEWIS. ALL RIGHTS RESERVED.
     </span>
     <br>
     <span style="color:#555; font-size:0.6rem; letter-spacing:3px; text-transform:uppercase;">
