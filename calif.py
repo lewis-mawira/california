@@ -1250,7 +1250,7 @@ st.markdown("""
     font-family: 'Space Mono', monospace;
 ">
     <span style="color:#CCFF00; font-size:0.75rem; letter-spacing:2px; text-transform:uppercase;">
-        © 2026 LEWIS. ALL RIGHTS RESERVED.
+        © 2026 Quinn Productions. ALL RIGHTS RESERVED.
     </span>
     <br>
     <span style="color:#555; font-size:0.6rem; letter-spacing:3px; text-transform:uppercase;">
