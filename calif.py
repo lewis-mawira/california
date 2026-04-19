@@ -93,13 +93,13 @@ st.markdown("""
     header[data-testid="stHeader"] { display: none !important; }
     .stDeployButton { display: none !important; }
 
-    /* ===== FIXED HEADER — SINGLE ROW, ALL ON ONE LINE ===== */
+    /* ===== STICKY HEADER — moves with page, sidebar-aware ===== */
     .header-container {
         background-color: #000000;
         border-bottom: 8px solid #FF007A;
-        position: fixed; top: 0; left: 0; right: 0; z-index: 9999999;
+        position: sticky; top: 0; left: 0; right: 0; z-index: 9999;
         width: 100%; box-sizing: border-box;
-        padding: 10px 14px;
+        padding: 10px 14px 10px 56px;
         display: flex; flex-direction: row;
         align-items: center; justify-content: space-between; gap: 10px;
     }
@@ -130,9 +130,8 @@ st.markdown("""
         border: 1px solid #CCFF00; letter-spacing: 1px; white-space: nowrap;
     }
 
-    /* ===== SPACER — pushes content below fixed header ===== */
-    .spacer { height: 62px; }
-    @media (max-width: 480px) { .spacer { height: 66px; } }
+    /* ===== SPACER — no longer needed with sticky header ===== */
+    .spacer { height: 0px; }
 
     /* ===== FULL SCREEN SALE POPUP ===== */
     .sale-overlay {
@@ -250,6 +249,46 @@ st.markdown("""
 
     /* ===== MISC ===== */
     .stDataFrame { border: 4px solid black !important; }
+
+    /* ===== SIDEBAR COLLAPSE BUTTON — styled to match California Boss ===== */
+    button[data-testid="stSidebarCollapsedControl"] {
+        display: flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        position: fixed !important;
+        top: 10px !important;
+        left: 10px !important;
+        z-index: 10100 !important;
+        background: #CCFF00 !important;
+        border: 3px solid #000000 !important;
+        border-radius: 4px !important;
+        width: 36px !important;
+        height: 36px !important;
+        padding: 6px !important;
+        cursor: pointer !important;
+        box-shadow: 4px 4px 0px #FF007A !important;
+    }
+    button[data-testid="stSidebarCollapsedControl"] svg {
+        fill: #000000 !important;
+        stroke: #000000 !important;
+        width: 18px !important;
+        height: 18px !important;
+    }
+    button[data-testid="stSidebarCollapsedControl"]:hover {
+        background: #FF007A !important;
+    }
+    button[data-testid="stBaseButton-headerNoPadding"] {
+        background: #CCFF00 !important;
+        border: 2px solid #000000 !important;
+        border-radius: 4px !important;
+    }
+    button[data-testid="stBaseButton-headerNoPadding"] svg {
+        fill: #000000 !important;
+        stroke: #000000 !important;
+    }
+    button[data-testid="stBaseButton-headerNoPadding"]:hover {
+        background: #FF007A !important;
+    }
 
     /* ===== HOVER EFFECTS ===== */
     .neo-card {
@@ -429,6 +468,84 @@ st.markdown(f"""
         }})();
     </script>
 """, unsafe_allow_html=True)
+
+# ── SIDEBAR TOGGLE — adapted from mie.py (confirmed working) ──────────────────
+# Strategy:
+#   1. Look for stSidebarCollapsedControl (exists when sidebar is COLLAPSED) → style it, remove custom btn
+#   2. Look for stBaseButton-headerNoPadding (exists when sidebar is EXPANDED) → inject custom btn that clicks it
+#   3. Poll every 800ms so state changes are caught immediately
+components.html("""<script>
+(function() {
+  function ensureSidebarToggle() {
+    var doc = window.parent.document;
+
+    // ── Sidebar is COLLAPSED: native expand button is in the main page ──
+    var native = doc.querySelector('button[data-testid="stSidebarCollapsedControl"]');
+    if (native) {
+      native.style.cssText = [
+        'display:flex!important','visibility:visible!important','opacity:1!important',
+        'position:fixed!important','top:10px!important','left:10px!important',
+        'z-index:10100!important','width:36px!important','height:36px!important',
+        'border-radius:4px!important','cursor:pointer!important','padding:6px!important',
+        'align-items:center!important','justify-content:center!important',
+        'background:#CCFF00!important',
+        'border:3px solid #000000!important',
+        'box-shadow:4px 4px 0px #FF007A!important'
+      ].join(';');
+      native.querySelectorAll('svg').forEach(function(s) {
+        s.style.fill = '#000000';
+        s.style.stroke = '#000000';
+        s.style.width = '18px';
+        s.style.height = '18px';
+      });
+      // Remove any custom injected button — native one is now visible and working
+      var old = doc.getElementById('calif-sidebar-toggle');
+      if (old) old.remove();
+      return;
+    }
+
+    // ── Sidebar is EXPANDED: inject a custom button that triggers native collapse ──
+    if (!doc.getElementById('calif-sidebar-toggle')) {
+      var btn = doc.createElement('button');
+      btn.id = 'calif-sidebar-toggle';
+      btn.title = 'Hide sidebar';
+      btn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18"><path fill="#000" d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>';
+      btn.style.cssText = [
+        'position:fixed','top:10px','left:10px','z-index:10100',
+        'width:36px','height:36px','border-radius:4px',
+        'border:3px solid #000000',
+        'background:#CCFF00',
+        'cursor:pointer','display:flex','align-items:center','justify-content:center',
+        'padding:6px','box-shadow:4px 4px 0px #FF007A'
+      ].join(';');
+      btn.onmouseover = function() {
+        this.style.background = '#FF007A';
+        this.querySelector('svg path').setAttribute('fill', '#CCFF00');
+      };
+      btn.onmouseout = function() {
+        this.style.background = '#CCFF00';
+        this.querySelector('svg path').setAttribute('fill', '#000');
+      };
+      btn.onclick = function() {
+        // Click Streamlit's native collapse button inside the sidebar header
+        var inner = doc.querySelector('button[data-testid="stBaseButton-headerNoPadding"]');
+        if (!inner) inner = doc.querySelector('[data-testid="stSidebar"] button');
+        if (inner) { inner.click(); return; }
+        // Last resort — hide sidebar directly
+        var sidebar = doc.querySelector('section[data-testid="stSidebar"]');
+        if (sidebar) sidebar.style.display = 'none';
+      };
+      doc.body.appendChild(btn);
+    }
+
+    // Keep polling — sidebar state will change and we need to react
+    setTimeout(ensureSidebarToggle, 800);
+  }
+
+  // Start after short delay to let Streamlit render
+  setTimeout(ensureSidebarToggle, 300);
+})();
+</script>""", height=0, scrolling=False)
 
 # --- FULL SCREEN SALE POPUP ---
 # THE PERMANENT SOLUTION:
