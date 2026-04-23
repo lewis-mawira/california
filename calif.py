@@ -963,19 +963,59 @@ if page == "🛒 POS TERMINAL":
                             if category == "KEG":
                                 cost_l = 156.0
                                 if not keg_settings_df.empty:
-                                    for _, ks_row in keg_settings_df.iterrows():
-                                        ml_val   = float(ks_row['ml'])
+                                    keg_sizes = keg_settings_df.to_dict('records')
+                                    # ── Quantity picker per cup size ──
+                                    st.markdown("**SET CUPS TO SELL:**")
+                                    keg_qtys = {}
+                                    for ks_row in keg_sizes:
+                                        ml_val    = float(ks_row['ml'])
                                         price_val = float(ks_row['price'])
-                                        litres   = ml_val / 1000.0
                                         label_str = ks_row['size_name'].upper()
-                                        btn_label = f"{label_str} ({int(ml_val)}ML @ {int(price_val)}/-)"
-                                        if st.button(btn_label, key=f"keg_{ks_row['size_name']}_{row['id']}"):
-                                            if row['stock'] < litres:
-                                                st.error("⛔ OUT OF STOCK")
-                                            else:
-                                                record_sale(row['id'], row['name'], "KEG", litres, price_val,
-                                                            litres * cost_l, method, f"{int(ml_val)}ML {label_str}")
+                                        col_lbl, col_minus, col_num, col_plus = st.columns([2.5, 1, 1.2, 1])
+                                        col_lbl.markdown(f"<div style='font-size:0.8rem;font-weight:900;padding-top:10px;'>{label_str}<br><span style='color:#FF007A;font-size:0.75rem;'>{int(ml_val)}ML @ {int(price_val)}/-</span></div>", unsafe_allow_html=True)
+                                        qty_key = f"keg_qty_{ks_row['size_name']}_{row['id']}"
+                                        if qty_key not in st.session_state:
+                                            st.session_state[qty_key] = 0
+                                        if col_minus.button("−", key=f"keg_minus_{ks_row['size_name']}_{row['id']}"):
+                                            if st.session_state[qty_key] > 0:
+                                                st.session_state[qty_key] -= 1
                                                 st.rerun()
+                                        col_num.markdown(f"<div style='text-align:center;font-size:1.4rem;font-weight:900;padding-top:4px;'>{st.session_state[qty_key]}</div>", unsafe_allow_html=True)
+                                        if col_plus.button("＋", key=f"keg_plus_{ks_row['size_name']}_{row['id']}"):
+                                            st.session_state[qty_key] += 1
+                                            st.rerun()
+                                        keg_qtys[ks_row['size_name']] = {
+                                            'qty': st.session_state[qty_key],
+                                            'ml': ml_val,
+                                            'price': price_val,
+                                            'litres': ml_val / 1000.0
+                                        }
+                                    # ── Order summary ──
+                                    total_litres = sum(v['qty'] * v['litres'] for v in keg_qtys.values())
+                                    total_price  = sum(v['qty'] * v['price']  for v in keg_qtys.values())
+                                    total_cups   = sum(v['qty'] for v in keg_qtys.values())
+                                    summary_parts = [f"{v['qty']}× {k.upper()}" for k, v in keg_qtys.items() if v['qty'] > 0]
+                                    if total_cups > 0:
+                                        st.markdown(f"""
+                                        <div style='background:#000;border:3px solid #CCFF00;padding:8px 12px;margin:8px 0;'>
+                                            <span style='color:#CCFF00;font-size:0.8rem;font-weight:900;'>ORDER: {" + ".join(summary_parts)}</span><br>
+                                            <span style='color:white;font-size:0.75rem;'>TOTAL: KES {total_price:,.0f} &nbsp;|&nbsp; {total_litres*1000:.0f}ML</span>
+                                        </div>
+                                        """, unsafe_allow_html=True)
+                                        if st.button(f"✅ CONFIRM — KES {total_price:,.0f}", key=f"keg_confirm_{row['id']}"):
+                                            if row['stock'] < total_litres:
+                                                st.error("⛔ NOT ENOUGH KEG STOCK")
+                                            else:
+                                                unit_desc = " + ".join(summary_parts)
+                                                record_sale(row['id'], row['name'], "KEG", total_litres,
+                                                            total_price, total_litres * cost_l,
+                                                            method, unit_desc)
+                                                # Reset qty counters after sale
+                                                for ks_row in keg_sizes:
+                                                    st.session_state[f"keg_qty_{ks_row['size_name']}_{row['id']}"] = 0
+                                                st.rerun()
+                                    else:
+                                        st.caption("☝️ Add cups above then confirm.")
 
                             elif category == "Spirits" and row['product_type'] == "Nusu":
                                 if st.button("FULL NUSU", key=f"fn_{row['id']}"):
