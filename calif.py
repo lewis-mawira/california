@@ -76,7 +76,7 @@ def init_db():
 init_db()
 
 # --- MAXIMALIST STYLING ---
-st.set_page_config(page_title="CALIFORNIA BOSS V19", layout="wide", page_icon="🔞")
+st.set_page_config(page_title="CALIFORNIA BOSS V19", layout="wide", page_icon="🔞", initial_sidebar_state="collapsed")
 
 st.markdown("""
 <style>
@@ -328,6 +328,105 @@ st.markdown("""
     [data-testid="stTab"]:hover {
         background: #CCFF00 !important;
         color: black !important;
+    }
+
+    /* ===== MOBILE OPTIMISATIONS ===== */
+    @media (max-width: 768px) {
+        /* Tighter main container padding — more usable space */
+        [data-testid="stMainBlockContainer"] {
+            padding-left: 8px !important;
+            padding-right: 8px !important;
+            padding-bottom: 20px !important;
+        }
+        .block-container {
+            padding-left: 8px !important;
+            padding-right: 8px !important;
+            max-width: 100% !important;
+        }
+
+        /* Header: stack on very narrow screens */
+        .header-container {
+            padding: 8px 10px 8px 52px !important;
+            gap: 6px !important;
+        }
+        .header-text {
+            font-size: clamp(0.9rem, 5vw, 1.3rem) !important;
+        }
+        .live-clock {
+            font-size: 0.58rem !important;
+            padding: 3px 6px !important;
+        }
+
+        /* Buttons: bigger tap targets on mobile */
+        .stButton > button {
+            height: 4rem !important;
+            font-size: clamp(0.85rem, 3.5vw, 1rem) !important;
+            min-height: 48px !important;
+        }
+
+        /* Metric grid: 2 columns max on mobile */
+        .metric-grid {
+            grid-template-columns: repeat(2, 1fr) !important;
+        }
+        .kpi-container {
+            grid-template-columns: repeat(2, 1fr) !important;
+        }
+
+        /* EOD grid: stack to single column */
+        .eod-row {
+            grid-template-columns: 1fr !important;
+        }
+
+        /* Tabs: allow horizontal scroll if many tabs */
+        [data-testid="stTabs"] > div:first-child {
+            overflow-x: auto !important;
+            -webkit-overflow-scrolling: touch;
+            flex-wrap: nowrap !important;
+        }
+        [data-testid="stTab"] {
+            white-space: nowrap !important;
+            min-width: fit-content !important;
+            font-size: 0.75rem !important;
+            padding: 6px 10px !important;
+        }
+
+        /* Inputs: tall enough to tap comfortably */
+        .stTextInput input,
+        .stNumberInput input,
+        .stSelectbox select,
+        [data-testid="stSelectbox"] > div {
+            min-height: 48px !important;
+            font-size: 1rem !important;
+        }
+
+        /* Reduce neo-card shadow on mobile for cleaner look */
+        .neo-card {
+            box-shadow: 4px 4px 0px #000000 !important;
+            padding: 10px !important;
+        }
+
+        /* Sale overlay close button — bigger touch target */
+        .x-close-btn {
+            width: 72px !important;
+            height: 72px !important;
+            font-size: 2rem !important;
+            top: 16px !important;
+            right: 16px !important;
+        }
+
+        /* Sidebar toggle: always accessible */
+        button[data-testid="stSidebarCollapsedControl"],
+        #calif-sidebar-toggle {
+            top: 8px !important;
+            left: 8px !important;
+            width: 40px !important;
+            height: 40px !important;
+        }
+
+        /* Dataframe scrollable horizontally */
+        .stDataFrame {
+            overflow-x: auto !important;
+        }
     }
 
     /* ===== EXPENSE EDITOR CARDS ===== */
