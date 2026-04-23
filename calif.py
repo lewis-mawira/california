@@ -1635,7 +1635,7 @@ st.markdown("""
 <div style="background:#000000;border-top:6px solid #FF007A;margin-top:60px;font-family:'Space Mono',monospace;overflow:hidden;">
     <div style="background:#FF007A;padding:6px 0;overflow:hidden;white-space:nowrap;">
         <span style="display:inline-block;color:#000;font-size:0.65rem;font-weight:900;letter-spacing:3px;text-transform:uppercase;animation:ticker 18s linear infinite;">
-            &nbsp;&nbsp;&nbsp;🍺 CALIFORNIA BOSS &nbsp;★&nbsp; NAIROBI'S FINEST POS &nbsp;★&nbsp; BUILT BY LEWIS &nbsp;★&nbsp; QUINN PRODUCTIONS 2026 &nbsp;★&nbsp; STAY WINNING &nbsp;★&nbsp; 🍺 CALIFORNIA BOSS &nbsp;★&nbsp; NAIROBI'S FINEST POS &nbsp;★&nbsp; BUILT BY LEWIS &nbsp;★&nbsp; QUINN PRODUCTIONS 2026 &nbsp;★&nbsp; STAY WINNING &nbsp;★&nbsp;
+            &nbsp;&nbsp;&nbsp;🍺 CALIFORNIA BOSS &nbsp;★&nbsp; KILGORIS FINEST CLUB &nbsp;★&nbsp; BUILT BY LEWIS &nbsp;★&nbsp; QUINN PRODUCTIONS 2026 &nbsp;★&nbsp; STAY WINNING &nbsp;★&nbsp; 🍺 CALIFORNIA BOSS &nbsp;★&nbsp; NAIROBI'S FINEST POS &nbsp;★&nbsp; BUILT BY LEWIS &nbsp;★&nbsp; QUINN PRODUCTIONS 2026 &nbsp;★&nbsp; STAY WINNING &nbsp;★&nbsp;
         </span>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;border-top:2px solid #222;">
