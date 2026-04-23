@@ -963,59 +963,35 @@ if page == "🛒 POS TERMINAL":
                             if category == "KEG":
                                 cost_l = 156.0
                                 if not keg_settings_df.empty:
-                                    keg_sizes = keg_settings_df.to_dict('records')
-                                    # ── Quantity picker per cup size ──
-                                    st.markdown("**SET CUPS TO SELL:**")
-                                    keg_qtys = {}
-                                    for ks_row in keg_sizes:
+                                    for _, ks_row in keg_settings_df.iterrows():
                                         ml_val    = float(ks_row['ml'])
                                         price_val = float(ks_row['price'])
+                                        litres    = ml_val / 1000.0
                                         label_str = ks_row['size_name'].upper()
-                                        col_lbl, col_minus, col_num, col_plus = st.columns([2.5, 1, 1.2, 1])
-                                        col_lbl.markdown(f"<div style='font-size:0.8rem;font-weight:900;padding-top:10px;'>{label_str}<br><span style='color:#FF007A;font-size:0.75rem;'>{int(ml_val)}ML @ {int(price_val)}/-</span></div>", unsafe_allow_html=True)
-                                        qty_key = f"keg_qty_{ks_row['size_name']}_{row['id']}"
+                                        qty_key   = f"keg_qty_{ks_row['size_name']}_{row['id']}"
                                         if qty_key not in st.session_state:
-                                            st.session_state[qty_key] = 0
-                                        if col_minus.button("−", key=f"keg_minus_{ks_row['size_name']}_{row['id']}"):
-                                            if st.session_state[qty_key] > 0:
+                                            st.session_state[qty_key] = 1
+                                        st.markdown(f"<div style='font-size:0.75rem;font-weight:900;color:#555;text-transform:uppercase;margin-top:10px;'>{label_str} — {int(ml_val)}ML @ KES {int(price_val)}/-</div>", unsafe_allow_html=True)
+                                        qc1, qc2, qc3, qc4 = st.columns([1, 1, 1, 3])
+                                        if qc1.button("−", key=f"keg_m_{ks_row['size_name']}_{row['id']}"):
+                                            if st.session_state[qty_key] > 1:
                                                 st.session_state[qty_key] -= 1
                                                 st.rerun()
-                                        col_num.markdown(f"<div style='text-align:center;font-size:1.4rem;font-weight:900;padding-top:4px;'>{st.session_state[qty_key]}</div>", unsafe_allow_html=True)
-                                        if col_plus.button("＋", key=f"keg_plus_{ks_row['size_name']}_{row['id']}"):
+                                        qc2.markdown(f"<div style='text-align:center;font-size:1.3rem;font-weight:900;padding-top:6px;'>{st.session_state[qty_key]}</div>", unsafe_allow_html=True)
+                                        if qc3.button("＋", key=f"keg_p_{ks_row['size_name']}_{row['id']}"):
                                             st.session_state[qty_key] += 1
                                             st.rerun()
-                                        keg_qtys[ks_row['size_name']] = {
-                                            'qty': st.session_state[qty_key],
-                                            'ml': ml_val,
-                                            'price': price_val,
-                                            'litres': ml_val / 1000.0
-                                        }
-                                    # ── Order summary ──
-                                    total_litres = sum(v['qty'] * v['litres'] for v in keg_qtys.values())
-                                    total_price  = sum(v['qty'] * v['price']  for v in keg_qtys.values())
-                                    total_cups   = sum(v['qty'] for v in keg_qtys.values())
-                                    summary_parts = [f"{v['qty']}× {k.upper()}" for k, v in keg_qtys.items() if v['qty'] > 0]
-                                    if total_cups > 0:
-                                        st.markdown(f"""
-                                        <div style='background:#000;border:3px solid #CCFF00;padding:8px 12px;margin:8px 0;'>
-                                            <span style='color:#CCFF00;font-size:0.8rem;font-weight:900;'>ORDER: {" + ".join(summary_parts)}</span><br>
-                                            <span style='color:white;font-size:0.75rem;'>TOTAL: KES {total_price:,.0f} &nbsp;|&nbsp; {total_litres*1000:.0f}ML</span>
-                                        </div>
-                                        """, unsafe_allow_html=True)
-                                        if st.button(f"✅ CONFIRM — KES {total_price:,.0f}", key=f"keg_confirm_{row['id']}"):
+                                        total_val = price_val * st.session_state[qty_key]
+                                        if qc4.button(f"SELL ×{st.session_state[qty_key]} — KES {total_val:,.0f}", key=f"keg_{ks_row['size_name']}_{row['id']}"):
+                                            total_litres = litres * st.session_state[qty_key]
                                             if row['stock'] < total_litres:
-                                                st.error("⛔ NOT ENOUGH KEG STOCK")
+                                                st.error("⛔ OUT OF STOCK")
                                             else:
-                                                unit_desc = " + ".join(summary_parts)
                                                 record_sale(row['id'], row['name'], "KEG", total_litres,
-                                                            total_price, total_litres * cost_l,
-                                                            method, unit_desc)
-                                                # Reset qty counters after sale
-                                                for ks_row in keg_sizes:
-                                                    st.session_state[f"keg_qty_{ks_row['size_name']}_{row['id']}"] = 0
+                                                            total_val, total_litres * cost_l,
+                                                            method, f"{int(ml_val)}ML {label_str} ×{st.session_state[qty_key]}")
+                                                st.session_state[qty_key] = 1
                                                 st.rerun()
-                                    else:
-                                        st.caption("☝️ Add cups above then confirm.")
 
                             elif category == "Spirits" and row['product_type'] == "Nusu":
                                 if st.button("FULL NUSU", key=f"fn_{row['id']}"):
@@ -1674,18 +1650,78 @@ elif page == "🔐 ADMIN VAULT":
 st.markdown("""
 <div style="
     background: #000000;
-    border-top: 4px solid #FF007A;
-    padding: 18px 20px;
-    margin-top: 40px;
-    text-align: center;
+    border-top: 6px solid #FF007A;
+    margin-top: 60px;
     font-family: 'Space Mono', monospace;
+    overflow: hidden;
 ">
-    <span style="color:#CCFF00; font-size:0.75rem; letter-spacing:2px; text-transform:uppercase;">
-        © 2026 Quinn Productions. ALL RIGHTS RESERVED.
-    </span>
-    <br>
-    <span style="color:#555; font-size:0.6rem; letter-spacing:3px; text-transform:uppercase;">
-        CALIFORNIA BOSS &nbsp;|&nbsp; VERSION 0.01.v1 &nbsp;|&nbsp; CREATED BY LEWIS
-    </span>
+    <!-- Ticker tape -->
+    <div style="
+        background: #FF007A;
+        padding: 6px 0;
+        overflow: hidden;
+        white-space: nowrap;
+    ">
+        <span style="
+            display: inline-block;
+            color: #000;
+            font-size: 0.65rem;
+            font-weight: 900;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            animation: ticker 18s linear infinite;
+        ">
+            &nbsp;&nbsp;&nbsp;🍺 CALIFORNIA BOSS &nbsp;★&nbsp; KILGORIS'S FINEST POS &nbsp;★&nbsp; BUILT BY LEWIS &nbsp;★&nbsp; QUINN PRODUCTIONS 2026 &nbsp;★&nbsp; STAY WINNING &nbsp;★&nbsp; 🍺 CALIFORNIA BOSS &nbsp;★&nbsp; NAIROBI'S FINEST POS &nbsp;★&nbsp; BUILT BY LEWIS &nbsp;★&nbsp; QUINN PRODUCTIONS 2026 &nbsp;★&nbsp; STAY WINNING &nbsp;★&nbsp;
+        </span>
+    </div>
+
+    <!-- Main footer body -->
+    <div style="
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 0;
+        border-top: 2px solid #222;
+    ">
+        <div style="padding: 20px 16px; border-right: 2px solid #222;">
+            <div style="color: #FF007A; font-size: 0.55rem; letter-spacing: 3px; text-transform: uppercase; margin-bottom: 6px;">SYSTEM</div>
+            <div style="color: #CCFF00; font-size: 0.75rem; font-weight: 900; letter-spacing: 1px;">CALIFORNIA BOSS</div>
+            <div style="color: #555; font-size: 0.58rem; margin-top: 4px; letter-spacing: 2px;">VERSION 0.01.v1</div>
+        </div>
+        <div style="padding: 20px 16px; border-right: 2px solid #222; text-align: center;">
+            <div style="
+                font-size: clamp(1.4rem, 5vw, 2.2rem);
+                color: #CCFF00;
+                font-family: 'Archivo Black', sans-serif;
+                line-height: 1;
+                -webkit-text-stroke: 1px #FF007A;
+                letter-spacing: 1px;
+            ">CALIF</div>
+            <div style="color: #FF007A; font-size: 0.5rem; letter-spacing: 4px; text-transform: uppercase; margin-top: 4px;">BOSS</div>
+        </div>
+        <div style="padding: 20px 16px; text-align: right;">
+            <div style="color: #FF007A; font-size: 0.55rem; letter-spacing: 3px; text-transform: uppercase; margin-bottom: 6px;">PRODUCER</div>
+            <div style="color: #CCFF00; font-size: 0.75rem; font-weight: 900; letter-spacing: 1px;">QUINN PRODUCTIONS</div>
+            <div style="color: #555; font-size: 0.58rem; margin-top: 4px; letter-spacing: 2px;">© 2026 · ALL RIGHTS RESERVED</div>
+        </div>
+    </div>
+
+    <!-- Bottom bar -->
+    <div style="
+        background: #FF007A;
+        padding: 7px 16px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    ">
+        <span style="color: #000; font-size: 0.55rem; font-weight: 900; letter-spacing: 2px; text-transform: uppercase;">CREATED BY LEWIS ⚡</span>
+        <span style="color: #000; font-size: 0.55rem; font-weight: 900; letter-spacing: 2px;">🔞 ADULTS ONLY</span>
+    </div>
 </div>
+
+<style>
+@keyframes ticker {
+    0%   { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+}
+</style>
 """, unsafe_allow_html=True)
